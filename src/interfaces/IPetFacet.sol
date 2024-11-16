@@ -36,10 +36,7 @@ interface IPetFacet {
     enum PetType {
         DOG,
         CAT,
-        BIRD,
-        FISH,
-        HAMSTER,
-        RABBIT
+        MOO
     }
 
     /**
@@ -105,13 +102,21 @@ interface IPetFacet {
      */
     event DailyTargetUpdated(address indexed owner, uint256 newTarget);
 
+
+    /**
+      * @notice Emitted when a co-owner is added to a pet
+     * @param owner The address of the pet owner
+     * @param coOwner The address of the added co-owner
+     */
+    event CoOwnerAdded(address indexed owner, address indexed coOwner);
+
+
     /**
      * @notice Initialize a new pet for the user with co-owners
      * @param petType The type of pet to initialize
      * @param dailyTarget The daily target savings for feeding the pet
-     * @param coOwners An array of additional co-owners for the pet
      */
-    function initializePet(PetType petType, uint256 dailyTarget, address[] calldata coOwners) external;
+    function initializePet(PetType petType, uint256 dailyTarget) external;
 
 
     /**

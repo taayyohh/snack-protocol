@@ -69,9 +69,14 @@ contract PetFacet is IPetFacet {
         return ps;
     }
 
-    function initializePet(PetType petType, uint256 dailyTarget, address[] calldata coOwners) external override {
+    /**
+     * @notice Initialize a new pet for the caller
+     * @dev Creates a pet with the specified type and daily savings target. Links a Safe for managing funds.
+     * @param petType The type of the pet being created (e.g., CAT, DOG)
+     * @param dailyTarget The daily savings target for the pet in wei
+    */
+    function initializePet(PetType petType, uint256 dailyTarget) external override {
         if (dailyTarget < MIN_DAILY_SAVING) revert InvalidDailyTarget();
-        require(coOwners.length > 0, "At least one co-owner is required");
 
         PetStorage storage ps = _getPetStorage();
         if (ps.pets[msg.sender].lastFed != 0) revert PetAlreadyExists();
@@ -86,24 +91,40 @@ contract PetFacet is IPetFacet {
         ps.pets[msg.sender].dailyTarget = dailyTarget;
         ps.pets[msg.sender].lastMeal = FoodType.BANANA;
 
-        // Add the primary owner and co-owners to the owners array and `isOwner` mapping
+        // Add the primary owner to the owners array and `isOwner` mapping
         ps.pets[msg.sender].owners.push(msg.sender);
         ps.pets[msg.sender].isOwner[msg.sender] = true;
-
-        for (uint256 i = 0; i < coOwners.length; i++) {
-            address coOwner = coOwners[i];
-            if (!ps.pets[msg.sender].isOwner[coOwner]) {
-                ps.pets[msg.sender].owners.push(coOwner);
-                ps.pets[msg.sender].isOwner[coOwner] = true;
-            }
-        }
+        // Create a dynamic array to store the owner's address
+        address[] memory owners = new address[](1);
+        owners[0] = msg.sender;
 
         // Create a safe in SavingsFacet
         SavingsFacet savingsFacet = SavingsFacet(address(this));
-        savingsFacet.createSafe(ps.pets[msg.sender].owners, 1);
+        savingsFacet.createSafe(owners, 1);
 
         emit PetCreated(msg.sender, petType, dailyTarget);
     }
+
+
+    /**
+     * @notice Add a co-owner to the caller's pet
+     * @dev Adds the specified address as a co-owner of the pet. Ensures no duplicates are added.
+     * @param coOwner The address of the co-owner to add
+     */
+    function addCoOwner(address coOwner) external {
+        PetStorage storage ps = _getPetStorage();
+        Pet storage pet = ps.pets[msg.sender];
+
+        if (pet.lastFed == 0) revert PetDoesNotExist(); // Ensure the pet exists
+        if (pet.isOwner[coOwner]) revert("Already a co-owner");
+
+        // Add the co-owner
+        pet.owners.push(coOwner);
+        pet.isOwner[coOwner] = true;
+
+        emit CoOwnerAdded(msg.sender, coOwner);
+    }
+
 
     /**
  * @notice Retrieve pet information for a specific owner
