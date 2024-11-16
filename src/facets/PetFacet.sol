@@ -19,7 +19,6 @@ contract PetFacet is IPetFacet {
     // Constants for game mechanics
     uint256 private constant MIN_DAILY_SAVING = 0.000333 ether;
     uint256 private constant STATE_UPDATE_INTERVAL = 12 hours;
-    uint256 private constant PREMIUM_PRICE = 0.1 ether;
 
     // Multipliers for food prices (relative to MIN_DAILY_SAVING)
     uint256 private constant BANANA_MULTIPLIER = 1;
@@ -87,7 +86,6 @@ contract PetFacet is IPetFacet {
         ps.pets[msg.sender].state = PetState.HUNGRY;
         ps.pets[msg.sender].lastFed = block.timestamp;
         ps.pets[msg.sender].happiness = 50;
-        ps.pets[msg.sender].isPremium = false;
         ps.pets[msg.sender].totalSavings = 0;
         ps.pets[msg.sender].dailyTarget = dailyTarget;
         ps.pets[msg.sender].lastMeal = FoodType.BANANA;
@@ -131,27 +129,41 @@ contract PetFacet is IPetFacet {
 
 
     /**
- * @notice Retrieve pet information for a specific owner
- * @param owner The address of the pet owner
- * @return A PetInfo struct with the pet's details
- */
-    function getPet(address owner) external view override returns (PetInfo memory) {
+    * @notice Retrieve pet information for a specific owner
+    * @param owner The address of the pet owner
+    * @return petInfo A PetInfo struct with the pet's details, or default values if no pet exists
+    */
+    function getPet(address owner) external view override returns (PetInfo memory petInfo) {
         PetStorage storage ps = _getPetStorage();
         Pet storage pet = ps.pets[owner];
-        if (pet.lastFed == 0) revert PetDoesNotExist();
 
+        // Return a default PetInfo if the pet doesn't exist
+        if (pet.lastFed == 0) {
+            return PetInfo({
+                petType: PetType(0), // Cast to PetType enum
+                state: PetState(0), // Cast to PetState enum
+                lastFed: 0,
+                happiness: 0,
+                totalSavings: 0,
+                dailyTarget: 0,
+                lastMeal: FoodType(0), // Cast to FoodType enum
+                owners: new address[](0)
+            });
+        }
+
+        // Return the actual pet information if it exists
         return PetInfo({
             petType: pet.petType,
             state: pet.state,
             lastFed: pet.lastFed,
             happiness: pet.happiness,
-            isPremium: pet.isPremium,
             totalSavings: pet.totalSavings,
             dailyTarget: pet.dailyTarget,
             lastMeal: pet.lastMeal,
             owners: pet.owners
         });
     }
+
 
 
     /**
@@ -264,7 +276,7 @@ contract PetFacet is IPetFacet {
         pet.lastFed = block.timestamp;
         pet.lastMeal = foodType;
 
-        uint256 happinessBoost = calculateHappinessBoost(foodType, pet.isPremium);
+        uint256 happinessBoost = calculateHappinessBoost(foodType);
 
         if (amount >= pet.dailyTarget) {
             pet.state = PetState.STUFFED;
@@ -283,14 +295,13 @@ contract PetFacet is IPetFacet {
     }
 
     /**
-     * @notice Calculate the happiness boost based on food type and premium status
+     * @notice Calculate the happiness boost based on food type
      * @param foodType The type of food being fed
-     * @param isPremium Whether the pet has premium status
      * @return The calculated happiness boost
      */
-    function calculateHappinessBoost(FoodType foodType, bool isPremium) internal pure returns (uint256) {
+    function calculateHappinessBoost(FoodType foodType) internal pure returns (uint256) {
         uint256 baseBoost = foodType == FoodType.STEAK ? 20 : foodType == FoodType.SALMON ? 15 : 10;
-        return isPremium ? baseBoost + 5 : baseBoost;
+        return baseBoost;
     }
 
 /**

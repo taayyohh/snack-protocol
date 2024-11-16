@@ -52,7 +52,6 @@ interface IPetFacet {
         PetState state;           // Current state of the pet
         uint256 lastFed;          // Timestamp of the last feeding
         uint256 happiness;        // Current happiness level
-        bool isPremium;           // Whether the pet has premium status
         uint256 totalSavings;     // Total ETH savings linked to the pet
         uint256 dailyTarget;      // Daily savings target
         FoodType lastMeal;        // The last food type fed to the pet
@@ -69,7 +68,6 @@ interface IPetFacet {
         PetState state;
         uint256 lastFed;
         uint256 happiness;
-        bool isPremium;
         uint256 totalSavings;
         uint256 dailyTarget;
         FoodType lastMeal;

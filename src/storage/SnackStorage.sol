@@ -29,7 +29,6 @@ library SnackStorage {
         uint8 state;        // 0: Stuffed -> 4: Starving
         uint32 lastFed;     // Timestamp
         uint32 happiness;   // 0-100
-        bool isPremium;     // Premium status
     }
 
     /**
