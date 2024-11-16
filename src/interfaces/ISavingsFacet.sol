@@ -56,6 +56,21 @@ interface ISavingsFacet {
     event AllocatedToLiquity(address indexed user, address indexed liquityFacetAddress, uint256 amount);
 
     /**
+     * @notice The required amount for staking
+     */
+    function STAKING_AMOUNT() external view returns (uint256);
+
+    /**
+     * @notice The address of the Safe singleton contract
+     */
+    function SAFE_SINGLETON() external view returns (address);
+
+    /**
+     * @notice The address of the Safe factory contract
+     */
+    function SAFE_FACTORY() external view returns (address);
+
+    /**
      * @notice Deposit ETH into savings
      */
     function deposit() external payable;
@@ -87,9 +102,9 @@ interface ISavingsFacet {
     function createSafe(address[] calldata owners, uint256 threshold) external;
 
     /**
-     * @notice Allocate ETH from a user's Safe to LiquityStakingFacet
+     * @notice Allocate ETH from Safe to Liquity
      * @param amount Amount of ETH to allocate
-     * @param liquityFacetAddress Address of the LiquityStakingFacet contract
+     * @param liquityFacetAddress Address of the LiquityStakingFacet
      */
     function allocateToLiquity(uint256 amount, address liquityFacetAddress) external;
 
@@ -120,10 +135,10 @@ interface ISavingsFacet {
     function getUserSafe(address user) external view returns (address);
 
     /**
-     * @notice Retrieve the total contributions and available balance of a user
+     * @notice Get user's contribution and balance information
      * @param user The address of the user
-     * @return totalDeposited Total amount the user has contributed
-     * @return currentBalance The user's current available balance
+     * @return totalContributed The total amount the user has contributed
+     * @return availableForWithdrawal The amount available for withdrawal
      */
-    function getUserContributions(address user) external view returns (uint256 totalDeposited, uint256 currentBalance);
+    function getUserContributions(address user) external view returns (uint256 totalContributed, uint256 availableForWithdrawal);
 }

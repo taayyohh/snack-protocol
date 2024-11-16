@@ -6,6 +6,7 @@ import { LibMath } from "../libraries/LibMath.sol";
 import { IPetFacet } from "../interfaces/IPetFacet.sol";
 import { DiamondStorage } from "../libraries/DiamondTypes.sol";
 import { SavingsFacet } from "./SavingsFacet.sol";
+import { ISavingsFacet } from "../interfaces/ISavingsFacet.sol";
 
 /**
  * @title PetFacet
@@ -94,13 +95,16 @@ contract PetFacet is IPetFacet {
         // Add the primary owner to the owners array and `isOwner` mapping
         ps.pets[msg.sender].owners.push(msg.sender);
         ps.pets[msg.sender].isOwner[msg.sender] = true;
+
         // Create a dynamic array to store the owner's address
         address[] memory owners = new address[](1);
         owners[0] = msg.sender;
 
-        // Create a safe in SavingsFacet
-        SavingsFacet savingsFacet = SavingsFacet(address(this));
-        savingsFacet.createSafe(owners, 1);
+        try ISavingsFacet(address(this)).createSafe(owners, 1) {
+            // Safe created successfully
+        } catch Error(string memory reason) {
+            revert(string(abi.encodePacked("Safe creation failed: ", reason)));
+        }
 
         emit PetCreated(msg.sender, petType, dailyTarget);
     }
