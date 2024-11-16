@@ -1,23 +1,42 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import {Script} from "forge-std/Script.sol";
-import {AdminControlFacet} from "../src/facets/AdminControlFacet.sol";
-import {DiamondCutFacet} from "../src/facets/DiamondCutFacet.sol";
-import {DiamondLoupeFacet} from "../src/facets/DiamondLoupeFacet.sol";
-import {LiquityStakingFacet} from "../src/facets/LiquityStakingFacet.sol";
-import {PetFacet} from "../src/facets/PetFacet.sol";
-import {SavingsFacet} from "../src/facets/SavingsFacet.sol";
-import {SavingsLiquityConnector} from "../src/facets/SavingsLiquityConnector.sol";
-import {Diamond} from "../src/core/Diamond.sol";
-import {DiamondInit} from "../src/initializers/DiamondInit.sol";
-import {IDiamondCut} from "../src/interfaces/IDiamondCut.sol";
+import { Script } from "forge-std/Script.sol";
+import { console } from "forge-std/Console.sol"; //
+import { AdminControlFacet } from "../src/facets/AdminControlFacet.sol";
+import { DiamondCutFacet } from "../src/facets/DiamondCutFacet.sol";
+import { DiamondLoupeFacet } from "../src/facets/DiamondLoupeFacet.sol";
+import { LiquityStakingFacet } from "../src/facets/LiquityStakingFacet.sol";
+import { PetFacet } from "../src/facets/PetFacet.sol";
+import { SavingsFacet } from "../src/facets/SavingsFacet.sol";
+import { SavingsLiquityConnector } from "../src/facets/SavingsLiquityConnector.sol";
+import { Diamond } from "../src/core/Diamond.sol";
+import { DiamondInit } from "../src/initializers/DiamondInit.sol";
+import { IDiamondCut } from "../src/interfaces/IDiamondCut.sol";
 
 contract DeployDiamond is Script {
+    // Base Sepolia addresses (with correct checksums)
+    address constant SAFE_PROXY_FACTORY = 0x8cCE54C22DE1E5C989d1f274C664aEE71739B250;
+    address constant SAFE_SINGLETON = 0xfb1bffC9d739B8D520DaF37dF666da4C687191EA;
+
+    // Liquity on Base Sepolia (with correct checksums)
+    address constant BORROWER_OPERATIONS = 0x4f61ff76C087e3240F088A91822a14ebe297DF14;
+    address constant TROVE_MANAGER = 0x3F3E304634275c9B02db68BfBe42098faBB6F892;
+    address constant STABILITY_POOL = 0x0F3d842387B7579D52f9477e1E4633920b1b0C01;
+    address constant LUSD_TOKEN = 0x6e2B76966cbD9cF4cC2Fa0D76d24d5241E0ABC2F;
+
+    // Protocol parameters
+    uint256 constant MIN_COLLATERAL_RATIO = 150; // 150%
+    uint256 constant BORROW_FEE = 1; // 1%
+    uint256 constant MIN_DAILY_DEPOSIT = 0.000333 ether;
+    uint256 constant MINIMUM_ALLOCATION = 1 ether;
+    uint256 constant MAX_ALLOCATION_PERCENTAGE = 80; // 80%
+    uint256 constant TARGET_COLLATERAL_RATIO = 200; // 200%
+
     function run() external {
         vm.startBroadcast();
 
-        // Step 1: Deploy all facets
+        // Deploy facets
         AdminControlFacet adminControlFacet = new AdminControlFacet();
         DiamondCutFacet diamondCutFacet = new DiamondCutFacet();
         DiamondLoupeFacet diamondLoupeFacet = new DiamondLoupeFacet();
@@ -26,112 +45,148 @@ contract DeployDiamond is Script {
         SavingsFacet savingsFacet = new SavingsFacet();
         SavingsLiquityConnector savingsLiquityConnector = new SavingsLiquityConnector();
 
-        // Step 2: Deploy the Diamond contract
-        Diamond diamond = new Diamond(address(msg.sender), address(diamondCutFacet));
+        // Deploy diamond with deployer as owner
+        Diamond diamond = new Diamond(msg.sender, address(diamondCutFacet));
 
-        // Step 3: Deploy the initializer
+        // Deploy initializer
         DiamondInit diamondInit = new DiamondInit();
 
-        // Step 4: Define selectors for each facet
-        IDiamondCut.FacetCut[] memory facetCuts = new IDiamondCut.FacetCut[](6);
+        // Create initialization arguments
+        DiamondInit.Args memory initArgs = DiamondInit.Args({
+            safeProxyFactory: SAFE_PROXY_FACTORY,
+            safeSingleton: SAFE_SINGLETON,
+            borrowerOperations: BORROWER_OPERATIONS,
+            troveManager: TROVE_MANAGER,
+            stabilityPool: STABILITY_POOL,
+            lusdToken: LUSD_TOKEN,
+            minCollateralRatio: MIN_COLLATERAL_RATIO,
+            borrowFee: BORROW_FEE,
+            minDailyDeposit: MIN_DAILY_DEPOSIT,
+            minimumAllocation: MINIMUM_ALLOCATION,
+            maxAllocationPercentage: MAX_ALLOCATION_PERCENTAGE,
+            targetCollateralRatio: TARGET_COLLATERAL_RATIO
+        });
 
-        facetCuts[0] = IDiamondCut.FacetCut({
+        // Create FacetCuts
+        IDiamondCut.FacetCut[] memory cuts = new IDiamondCut.FacetCut[](6);
+
+        // Admin Control facet
+        bytes4[] memory adminSelectors = new bytes4[](12);
+        adminSelectors[0] = AdminControlFacet.initializeAdminControls.selector;
+        adminSelectors[1] = AdminControlFacet.proposeOperation.selector;
+        adminSelectors[2] = AdminControlFacet.signOperation.selector;
+        adminSelectors[3] = AdminControlFacet.executeOperation.selector;
+        adminSelectors[4] = AdminControlFacet.setPauseState.selector;
+        adminSelectors[5] = AdminControlFacet.emergencyWithdraw.selector;
+        adminSelectors[6] = AdminControlFacet.getProtocolState.selector;
+        adminSelectors[7] = AdminControlFacet.isActionAllowed.selector;
+        adminSelectors[8] = AdminControlFacet.getOperation.selector;
+        adminSelectors[9] = AdminControlFacet.getWithdrawalLimit.selector;
+        adminSelectors[10] = AdminControlFacet.getGlobalWithdrawalLimit.selector;
+        adminSelectors[11] = AdminControlFacet.isAdmin.selector;
+
+        cuts[0] = IDiamondCut.FacetCut({
             facetAddress: address(adminControlFacet),
             action: IDiamondCut.FacetCutAction.Add,
-            functionSelectors: getAdminControlSelectors()
+            functionSelectors: adminSelectors
         });
 
-        facetCuts[1] = IDiamondCut.FacetCut({
+        // Diamond Loupe facet
+        bytes4[] memory loupeSelectors = new bytes4[](4);
+        loupeSelectors[0] = DiamondLoupeFacet.facets.selector;
+        loupeSelectors[1] = DiamondLoupeFacet.facetFunctionSelectors.selector;
+        loupeSelectors[2] = DiamondLoupeFacet.facetAddresses.selector;
+        loupeSelectors[3] = DiamondLoupeFacet.facetAddress.selector;
+
+        cuts[1] = IDiamondCut.FacetCut({
             facetAddress: address(diamondLoupeFacet),
             action: IDiamondCut.FacetCutAction.Add,
-            functionSelectors: getDiamondLoupeSelectors()
+            functionSelectors: loupeSelectors
         });
 
-        facetCuts[2] = IDiamondCut.FacetCut({
+        // Liquity Staking facet
+        bytes4[] memory stakingSelectors = new bytes4[](7);
+        stakingSelectors[0] = LiquityStakingFacet.openPosition.selector;
+        stakingSelectors[1] = LiquityStakingFacet.addCollateral.selector;
+        stakingSelectors[2] = LiquityStakingFacet.adjustDebt.selector;
+        stakingSelectors[3] = LiquityStakingFacet.claimRewards.selector;
+        stakingSelectors[4] = LiquityStakingFacet.closePosition.selector;
+        stakingSelectors[5] = LiquityStakingFacet.getPosition.selector;
+        stakingSelectors[6] = LiquityStakingFacet.getRewards.selector;
+
+        cuts[2] = IDiamondCut.FacetCut({
             facetAddress: address(liquityStakingFacet),
             action: IDiamondCut.FacetCutAction.Add,
-            functionSelectors: getLiquityStakingSelectors()
+            functionSelectors: stakingSelectors
         });
 
-        facetCuts[3] = IDiamondCut.FacetCut({
+        // Pet facet
+        bytes4[] memory petSelectors = new bytes4[](8);
+        petSelectors[0] = PetFacet.initializePet.selector;
+        petSelectors[1] = PetFacet.feed.selector;
+        petSelectors[2] = PetFacet.updateDailyTarget.selector;
+        petSelectors[3] = PetFacet.getPet.selector;
+        petSelectors[4] = PetFacet.calculatePetState.selector;
+        petSelectors[5] = PetFacet.calculateHappiness.selector;
+        petSelectors[6] = PetFacet.getFoodPrice.selector;
+        petSelectors[7] = PetFacet.upgradeToPremium.selector;
+
+        cuts[3] = IDiamondCut.FacetCut({
             facetAddress: address(petFacet),
             action: IDiamondCut.FacetCutAction.Add,
-            functionSelectors: getPetFacetSelectors()
+            functionSelectors: petSelectors
         });
 
-        facetCuts[4] = IDiamondCut.FacetCut({
+        // Savings facet
+        bytes4[] memory savingsSelectors = new bytes4[](9);
+        savingsSelectors[0] = SavingsFacet.deposit.selector;
+        savingsSelectors[1] = SavingsFacet.withdraw.selector;
+        savingsSelectors[2] = SavingsFacet.linkSafe.selector;
+        savingsSelectors[3] = SavingsFacet.createSafe.selector;
+        savingsSelectors[4] = SavingsFacet.initiateStaking.selector;
+        savingsSelectors[5] = SavingsFacet.getSavingsInfo.selector;
+        savingsSelectors[6] = SavingsFacet.canStake.selector;
+        savingsSelectors[7] = SavingsFacet.getUserSafe.selector;
+        savingsSelectors[8] = SavingsFacet.getUserContributions.selector;
+
+        cuts[4] = IDiamondCut.FacetCut({
             facetAddress: address(savingsFacet),
             action: IDiamondCut.FacetCutAction.Add,
-            functionSelectors: getSavingsSelectors()
+            functionSelectors: savingsSelectors
         });
 
-        facetCuts[5] = IDiamondCut.FacetCut({
+        // Savings Liquity Connector facet
+        bytes4[] memory connectorSelectors = new bytes4[](3);
+        connectorSelectors[0] = SavingsLiquityConnector.allocateToLiquity.selector;
+        connectorSelectors[1] = SavingsLiquityConnector.claimYield.selector;
+        connectorSelectors[2] = SavingsLiquityConnector.getYieldStrategy.selector;
+
+        cuts[5] = IDiamondCut.FacetCut({
             facetAddress: address(savingsLiquityConnector),
             action: IDiamondCut.FacetCutAction.Add,
-            functionSelectors: getSavingsLiquityConnectorSelectors()
+            functionSelectors: connectorSelectors
         });
 
-        // Step 5: Perform diamondCut
+        // Perform diamond cut with initialization
         IDiamondCut(address(diamond)).diamondCut(
-            facetCuts,
+            cuts,
             address(diamondInit),
-            abi.encodeWithSelector(DiamondInit.init.selector)
+            abi.encodeWithSelector(DiamondInit.init.selector, initArgs)
         );
 
         vm.stopBroadcast();
-    }
 
-    // Define selectors for each facet
-    function getAdminControlSelectors() internal pure returns (bytes4[] memory selectors) {
-        selectors = new bytes4[](11);
-        selectors[0] = bytes4(0x30783666); // Function: addAdmin()
-        selectors[1] = bytes4(0x30786362); // Function: removeAdmin()
-        selectors[2] = bytes4(0x30783239); // Function: setPauseState()
-        selectors[3] = bytes4(0x30783237); // Function: proposeOperation()
-        selectors[4] = bytes4(0x30786437); // Function: signOperation()
-        selectors[5] = bytes4(0x30786337); // Function: executeOperation()
-        selectors[6] = bytes4(0x30783134); // Function: isAdmin()
-        selectors[7] = bytes4(0x30786561); // Function: getProtocolState()
-        selectors[8] = bytes4(0x30783234); // Function: getOperation()
-        selectors[9] = bytes4(0x30783933); // Function: getWithdrawalLimit()
-        selectors[10] = bytes4(0x30783633); // Function: emergencyWithdraw()
-    }
-
-    function getDiamondLoupeSelectors() internal pure returns (bytes4[] memory selectors) {
-        selectors = new bytes4[](5) ;
-        selectors[0] = bytes4(0x30786364); // Function: facets()
-        selectors[1] = bytes4(0x30783532); // Function: facetFunctionSelectors()
-        selectors[2] = bytes4(0x30786164); // Function: facetAddresses()
-        selectors[3] = bytes4(0x30783761); // Function: facetAddress()
-        selectors[4] = bytes4(0x30783031); // Function: supportsInterface()
-    }
-
-    function getLiquityStakingSelectors() internal pure returns (bytes4[] memory selectors) {
-        selectors = new bytes4[](3) ;
-        selectors[0] = bytes4(0x30786638); // Function: stake()
-        selectors[1] = bytes4(0x30786435); // Function: unstake()
-        selectors[2] = bytes4(0x30783938); // Function: getStakingBalance()
-    }
-
-    function getPetFacetSelectors() internal pure returns (bytes4[] memory selectors) {
-        selectors = new bytes4[](3) ;
-        selectors[0] = bytes4(0x30786662); // Function: checkPetHealth()
-        selectors[1] = bytes4(0x30783437); // Function: feedPet()
-        selectors[2] = bytes4(0x30783338); // Function: playWithPet()
-    }
-
-    function getSavingsSelectors() internal pure returns (bytes4[] memory selectors) {
-        selectors = new bytes4[](4) ;
-        selectors[0] = bytes4(0x30786236); // Function: deposit()
-        selectors[1] = bytes4(0x30783265); // Function: withdraw()
-        selectors[2] = bytes4(0x30783132); // Function: checkBalance()
-        selectors[3] = bytes4(0x30783532); // Function: accrueInterest()
-    }
-
-    function getSavingsLiquityConnectorSelectors() internal pure returns (bytes4[] memory selectors) {
-        selectors = new bytes4[](3) ;
-        selectors[0] = bytes4(0x30783766);
-        selectors[1] = bytes4(0x30783536);
-        selectors[2] = bytes4(0x30786532);
+        // Log addresses for manual saving
+        console.log("--- Contract Addresses ---");
+        console.log("Diamond:", address(diamond));
+        console.log("AdminControlFacet:", address(adminControlFacet));
+        console.log("DiamondCutFacet:", address(diamondCutFacet));
+        console.log("DiamondLoupeFacet:", address(diamondLoupeFacet));
+        console.log("LiquityStakingFacet:", address(liquityStakingFacet));
+        console.log("PetFacet:", address(petFacet));
+        console.log("SavingsFacet:", address(savingsFacet));
+        console.log("SavingsLiquityConnector:", address(savingsLiquityConnector));
+        console.log("DiamondInit:", address(diamondInit));
+        console.log("------------------------");
     }
 }

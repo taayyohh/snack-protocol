@@ -167,7 +167,7 @@ interface IAdminControl {
 
     /**
      * @notice Check if address is admin
-     * @param account Address to check
+     * @param account Address to checak
      * @return bool indicating if address is admin
      */
     function isAdmin(address account) external view returns (bool);

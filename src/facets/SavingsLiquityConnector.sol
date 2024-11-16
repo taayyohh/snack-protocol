@@ -82,7 +82,8 @@ contract SavingsLiquityConnector is ISavingsLiquityConnector {
 
         // Get yields from Liquity
         ILiquityIntegration liquity = ILiquityIntegration(address(this));
-        (uint256 lqtyRewards, uint256 ethGains) = liquity.getRewards(msg.sender);
+        // Only capture ethGains since we're not using lqtyRewards
+        (,uint256 ethGains) = liquity.getRewards(msg.sender);
 
         if (ethGains == 0) revert NoYieldAvailable();
 
