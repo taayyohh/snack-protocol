@@ -2,7 +2,8 @@
 pragma solidity ^0.8.19;
 
 import { ISavingsFacet } from "../interfaces/ISavingsFacet.sol";
-import "../../lib/safe-smart-account/contracts/Safe.sol";
+import { SafeProxyFactory } from "../../lib/safe-smart-account/contracts/proxies/SafeProxyFactory.sol";
+import { ISafe } from "../../lib/safe-smart-account/contracts/interfaces/ISafe.sol";
 
 /**
  * @title SavingsFacet
@@ -10,6 +11,10 @@ import "../../lib/safe-smart-account/contracts/Safe.sol";
  */
 contract SavingsFacet is ISavingsFacet {
     uint256 public constant STAKING_AMOUNT = 32 ether;
+
+    // Safe configuration - Base Sepolia addresses
+    address public immutable SAFE_SINGLETON = address(0xfb1bffC9d739B8D520DaF37dF666da4C687191EA);
+    address public immutable SAFE_FACTORY = address(0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67);
 
     /**
      * @dev Storage structure for managing savings
@@ -29,7 +34,6 @@ contract SavingsFacet is ISavingsFacet {
         assembly {
             ss.slot := position
         }
-
         return ss;
     }
 
@@ -95,31 +99,49 @@ contract SavingsFacet is ISavingsFacet {
      */
     function createSafe(address[] calldata owners, uint256 threshold) external override {
         SavingsStorage storage ss = _getSavingsStorage();
+
+        // Check if the user already has a linked Safe
         require(ss.userSafes[msg.sender] == address(0), "Safe already linked");
 
-        // Create a new Safe instance
-        Safe safe = new Safe();
+        // Ensure the owners array is non-empty
+        require(owners.length > 0, "Owners array cannot be empty");
 
-        // Setup the Safe with the specified owners and threshold
-        safe.setup(
+        // Validate the threshold
+        require(threshold > 0 && threshold <= owners.length, "Invalid threshold");
+
+        // Validate owner addresses
+        for(uint256 i = 0; i < owners.length; i++) {
+            require(owners[i] != address(0), "Invalid owner address");
+        }
+
+        // Prepare initialization data for Safe
+        bytes memory initializer = abi.encodeWithSelector(
+            ISafe.setup.selector,
             owners,
             threshold,
-            address(0),       // No initial delegate call (target address)
-            bytes(""),        // No initial delegate call (data payload)
+            address(0),       // No initial delegate call
+            bytes(""),        // No initial delegate call data
             address(0),       // Fallback handler
-            address(0),       // No payment token (ETH is used)
-            0,                // No payment amount
-            payable(msg.sender) // Refund receiver (msg.sender)
+            address(0),       // No payment token
+            0,               // No payment
+            payable(address(0)) // No refund receiver
         );
 
-        // Store the Safe address in userSafes mapping
-        ss.userSafes[msg.sender] = address(safe);
+        // Deploy new Safe proxy with explicit address conversion
+        address safe = address(SafeProxyFactory(SAFE_FACTORY).createProxyWithNonce(
+            SAFE_SINGLETON,
+            initializer,
+            block.timestamp  // Using timestamp as salt
+        ));
 
-        // Update the user's savings information with the Safe address
+        // Store the Safe address
+        ss.userSafes[msg.sender] = safe;
+
+        // Update savings info
         SavingsInfo storage info = ss.savings[msg.sender];
-        info.safeAddress = address(safe);
+        info.safeAddress = safe;
 
-        emit SafeLinked(msg.sender, address(safe));
+        emit SafeLinked(msg.sender, safe);
     }
 
     /**
