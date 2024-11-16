@@ -9,23 +9,79 @@ import { Safe } from "../../lib/safe-smart-account/contracts/Safe.sol";
 
 /**
  * @title AdminControlFacet
- * @notice Manages admin functions and emergency controls
+ * @notice Enhanced admin controls with timelock and rate limiting
  */
 contract AdminControlFacet is IAdminControl {
     /**
      * @dev Storage for admin controls
      */
     struct AdminStorage {
+        // Existing storage
         PauseState currentState;
         mapping(address => bool) admins;
         mapping(EmergencyAction => bool) allowedActions;
         bool isShutdown;
         uint256 lastEmergencyAction;
+
+        // New storage for enhanced security
+        mapping(bytes32 => TimelockOperation) pendingOperations;
+        mapping(address => WithdrawalLimit) withdrawalLimits;
+        uint256 globalWithdrawalLimit;
+        uint256 lastWithdrawalReset;
+        uint256 currentDailyWithdrawals;
+        uint256 minAdminSignatures;
+        mapping(bytes32 => mapping(address => bool)) adminSignatures;
     }
 
     /**
+     * @dev Timelock operation details
+     */
+    struct TimelockOperation {
+        bytes32 operationId;
+        uint256 timestamp;
+        uint256 signaturesRequired;
+        uint256 signaturesReceived;
+        bool executed;
+        OperationType operationType;
+        bytes parameters;
+    }
+
+    /**
+     * @dev Withdrawal rate limiting
+     */
+    struct WithdrawalLimit {
+        uint256 dailyLimit;
+        uint256 currentDay;
+        uint256 todayWithdrawn;
+    }
+
+    /**
+     * @dev Operation types for timelock
+     */
+    enum OperationType {
+        CHANGE_ADMIN,
+        UPDATE_LIMITS,
+        EMERGENCY_ACTION,
+        PROTOCOL_UPGRADE
+    }
+
+    // Constants
+    uint256 constant TIMELOCK_DELAY = 24 hours;
+    uint256 constant EMERGENCY_TIMELOCK_DELAY = 1 hours;
+    uint256 constant MAX_DAILY_WITHDRAWAL = 100 ether;
+    uint256 constant WITHDRAWAL_WINDOW = 24 hours;
+
+    // New errors
+    error TimelockNotExpired();
+    error InsufficientSignatures();
+    error OperationNotFound();
+    error DailyLimitExceeded();
+    error AlreadyExecuted();
+    error InvalidTimelock();
+    error SignatureAlreadyAdded();
+
+    /**
      * @dev Get admin storage
-     * @return adminStorage The AdminStorage struct from its dedicated storage slot
      */
     function _getAdminStorage() internal pure returns (AdminStorage storage adminStorage) {
         bytes32 position = keccak256("snack.protocol.storage.admin");
@@ -56,13 +112,160 @@ contract AdminControlFacet is IAdminControl {
     }
 
     /**
-     * @notice Set protocol pause state
+     * @dev Initialize admin controls
+     * @param minSignatures Minimum signatures required for admin actions
+     * @param initialAdmins Array of initial admin addresses
+     */
+    function initializeAdminControls(uint256 minSignatures, address[] calldata initialAdmins) external {
+        require(msg.sender == LibDiamond.contractOwner(), "Only owner");
+        AdminStorage storage adminStorage = _getAdminStorage();
+
+        adminStorage.minAdminSignatures = minSignatures;
+        adminStorage.globalWithdrawalLimit = MAX_DAILY_WITHDRAWAL;
+        adminStorage.lastWithdrawalReset = block.timestamp;
+
+        for (uint i = 0; i < initialAdmins.length; i++) {
+            adminStorage.admins[initialAdmins[i]] = true;
+        }
+    }
+
+    /**
+     * @notice Propose a new timelock operation
+     * @param operationType Type of operation
+     * @param parameters Encoded parameters for the operation
+     * @return operationId The ID of the created operation
+     */
+    function proposeOperation(
+        OperationType operationType,
+        bytes calldata parameters
+    ) external onlyAdmin returns (bytes32 operationId) {
+        AdminStorage storage adminStorage = _getAdminStorage();
+
+        operationId = keccak256(abi.encodePacked(
+            block.timestamp,
+            operationType,
+            parameters
+        ));
+
+        // Create new timelock operation
+        uint256 delay = operationType == OperationType.EMERGENCY_ACTION
+            ? EMERGENCY_TIMELOCK_DELAY
+            : TIMELOCK_DELAY;
+
+        adminStorage.pendingOperations[operationId] = TimelockOperation({
+            operationId: operationId,
+            timestamp: block.timestamp + delay,
+            signaturesRequired: adminStorage.minAdminSignatures,
+            signaturesReceived: 1, // Proposer automatically signs
+            executed: false,
+            operationType: operationType,
+            parameters: parameters
+        });
+
+        // Record proposer's signature
+        adminStorage.adminSignatures[operationId][msg.sender] = true;
+
+        emit OperationProposed(operationId, msg.sender, operationType);
+    }
+
+    /**
+     * @notice Sign a pending operation
+     * @param operationId The operation to sign
+     */
+    function signOperation(bytes32 operationId) external onlyAdmin {
+        AdminStorage storage adminStorage = _getAdminStorage();
+        TimelockOperation storage operation = adminStorage.pendingOperations[operationId];
+
+        if (operation.operationId == bytes32(0)) revert OperationNotFound();
+        if (operation.executed) revert AlreadyExecuted();
+        if (adminStorage.adminSignatures[operationId][msg.sender]) revert SignatureAlreadyAdded();
+
+        adminStorage.adminSignatures[operationId][msg.sender] = true;
+        operation.signaturesReceived += 1;
+
+        emit OperationSigned(operationId, msg.sender);
+    }
+
+    /**
+     * @notice Execute a timelock operation
+     * @param operationId The operation to execute
+     */
+    function executeOperation(bytes32 operationId) external onlyAdmin {
+        AdminStorage storage adminStorage = _getAdminStorage();
+        TimelockOperation storage operation = adminStorage.pendingOperations[operationId];
+
+        if (operation.operationId == bytes32(0)) revert OperationNotFound();
+        if (operation.executed) revert AlreadyExecuted();
+        if (block.timestamp < operation.timestamp) revert TimelockNotExpired();
+        if (operation.signaturesReceived < operation.signaturesRequired) revert InsufficientSignatures();
+
+        operation.executed = true;
+
+        if (operation.operationType == OperationType.EMERGENCY_ACTION) {
+            _executeEmergencyAction(operation.parameters);
+        } else if (operation.operationType == OperationType.UPDATE_LIMITS) {
+            _executeUpdateLimits(operation.parameters);
+        } else if (operation.operationType == OperationType.CHANGE_ADMIN) {
+            _executeAdminChange(operation.parameters);
+        }
+
+        emit OperationExecuted(operationId, msg.sender);
+    }
+
+    /**
+     * @notice Execute emergency withdrawal with rate limiting
+     * @param user Address to withdraw funds for
+     */
+    function emergencyWithdraw(address user) external override onlyAdmin {
+        AdminStorage storage adminStorage = _getAdminStorage();
+
+        if (!adminStorage.allowedActions[EmergencyAction.WITHDRAW]) {
+            revert InvalidState();
+        }
+
+        // Check and update withdrawal limits
+        _checkWithdrawalLimits(user);
+
+        // Get user's Safe and savings info
+        ISavingsFacet savings = ISavingsFacet(address(this));
+        address safeAddress = savings.getUserSafe(user);
+        if (safeAddress == address(0)) revert InvalidState();
+
+        // Get total withdrawable amount
+        uint256 withdrawAmount = Safe(safeAddress).getBalance();
+        if (withdrawAmount == 0) revert InvalidAmount();
+
+        // Update withdrawal tracking
+        adminStorage.withdrawalLimits[user].todayWithdrawn += withdrawAmount;
+        adminStorage.currentDailyWithdrawals += withdrawAmount;
+
+        // Execute withdrawal through Safe
+        _executeWithdrawal(safeAddress, user, withdrawAmount);
+
+        emit EmergencyWithdrawal(user, withdrawAmount);
+    }
+
+    /**
+     * @notice Update protocol pause state with timelock
      * @param state New pause state
      */
     function setPauseState(PauseState state) external override onlyAdmin notShutdown {
         AdminStorage storage adminStorage = _getAdminStorage();
         if (state == adminStorage.currentState) revert AlreadyPaused();
 
+        bytes32 operationId = keccak256(abi.encodePacked("PAUSE", state, block.timestamp));
+        TimelockOperation storage operation = adminStorage.pendingOperations[operationId];
+
+        if (operation.timestamp == 0) {
+            // Create new timelock operation
+            operation.timestamp = block.timestamp + EMERGENCY_TIMELOCK_DELAY;
+            operation.signaturesRequired = adminStorage.minAdminSignatures;
+            operation.parameters = abi.encode(state);
+        }
+
+        if (block.timestamp < operation.timestamp) revert TimelockNotExpired();
+
+        // Update state
         adminStorage.currentState = state;
         adminStorage.lastEmergencyAction = block.timestamp;
 
@@ -74,30 +277,12 @@ contract AdminControlFacet is IAdminControl {
         emit ProtocolPaused(state);
     }
 
-    /**
-     * @notice Execute emergency withdrawal
-     * @param user Address to withdraw funds for
-     */
-    function emergencyWithdraw(address user) external override onlyAdmin {
-        AdminStorage storage adminStorage = _getAdminStorage();
+    // Internal functions
 
-        if (!adminStorage.allowedActions[EmergencyAction.WITHDRAW]) {
-            revert InvalidState();
-        }
-
-        // Get user's Safe and savings info
-        ISavingsFacet savings = ISavingsFacet(address(this));
-        address safeAddress = savings.getUserSafe(user);
-        if (safeAddress == address(0)) revert InvalidState();
-
-        // Get total withdrawable amount
-        uint256 withdrawAmount = Safe(safeAddress).getBalance();
-        if (withdrawAmount == 0) revert InvalidAmount();
-
-        // Execute withdrawal through Safe
+    function _executeWithdrawal(address safeAddress, address user, uint256 amount) internal {
         try Safe(safeAddress).execTransaction(
             payable(user),
-            withdrawAmount,
+            amount,
             "",
             Safe.Operation.Call,
             0,
@@ -111,70 +296,62 @@ contract AdminControlFacet is IAdminControl {
         } catch {
             revert WithdrawalFailed();
         }
-
-        emit EmergencyWithdrawal(user, withdrawAmount);
     }
 
-    /**
-     * @notice Complete protocol shutdown
-     */
-    function emergencyShutdown() external override onlyAdmin {
+    function _checkWithdrawalLimits(address user) internal {
+        AdminStorage storage adminStorage = _getAdminStorage();
+        WithdrawalLimit storage userLimit = adminStorage.withdrawalLimits[user];
+
+        // Reset daily limits if needed
+        if (block.timestamp >= adminStorage.lastWithdrawalReset + WITHDRAWAL_WINDOW) {
+            adminStorage.lastWithdrawalReset = block.timestamp;
+            adminStorage.currentDailyWithdrawals = 0;
+        }
+
+        if (block.timestamp >= userLimit.currentDay + WITHDRAWAL_WINDOW) {
+            userLimit.currentDay = block.timestamp;
+            userLimit.todayWithdrawn = 0;
+        }
+
+        // Check limits
+        if (userLimit.todayWithdrawn >= userLimit.dailyLimit) revert DailyLimitExceeded();
+        if (adminStorage.currentDailyWithdrawals >= adminStorage.globalWithdrawalLimit) {
+            revert DailyLimitExceeded();
+        }
+    }
+
+    function _executeEmergencyAction(bytes memory parameters) internal {
+        (EmergencyAction action) = abi.decode(parameters, (EmergencyAction));
         AdminStorage storage adminStorage = _getAdminStorage();
 
-        // Update state
-        adminStorage.isShutdown = true;
-        adminStorage.currentState = PauseState.FULLY_PAUSED;
-        adminStorage.lastEmergencyAction = block.timestamp;
-
-        // Disable all actions except withdrawals
-        adminStorage.allowedActions[EmergencyAction.PAUSE] = false;
-        adminStorage.allowedActions[EmergencyAction.SHUTDOWN] = true;
-        adminStorage.allowedActions[EmergencyAction.WITHDRAW] = true;
-
-        emit ProtocolPaused(PauseState.FULLY_PAUSED);
+        if (action == EmergencyAction.SHUTDOWN) {
+            adminStorage.isShutdown = true;
+            adminStorage.currentState = PauseState.FULLY_PAUSED;
+            adminStorage.allowedActions[EmergencyAction.WITHDRAW] = true;
+        }
     }
 
-    /**
-     * @notice Get current protocol state
-     * @return Current pause state of the protocol
-     */
-    function getProtocolState() external view override returns (PauseState) {
-        return _getAdminStorage().currentState;
+    function _executeUpdateLimits(bytes memory parameters) internal {
+        (uint256 newGlobalLimit, uint256 newMinSignatures) = abi.decode(parameters, (uint256, uint256));
+        AdminStorage storage adminStorage = _getAdminStorage();
+
+        adminStorage.globalWithdrawalLimit = newGlobalLimit;
+        adminStorage.minAdminSignatures = newMinSignatures;
     }
 
-    /**
-     * @notice Check if action is allowed
-     * @param action Action to check
-     * @return bool indicating if action is allowed
-     */
-    function isActionAllowed(EmergencyAction action) external view override returns (bool) {
-        return _getAdminStorage().allowedActions[action];
+    function _executeAdminChange(bytes memory parameters) internal {
+        (address admin, bool isAdd) = abi.decode(parameters, (address, bool));
+        AdminStorage storage adminStorage = _getAdminStorage();
+
+        if (isAdd) {
+            adminStorage.admins[admin] = true;
+        } else {
+            adminStorage.admins[admin] = false;
+        }
     }
 
-    /**
-     * @notice Add a new admin
-     * @param admin Address to add as admin
-     */
-    function addAdmin(address admin) external onlyAdmin {
-        if (admin == address(0)) revert InvalidState();
-        _getAdminStorage().admins[admin] = true;
-    }
-
-    /**
-     * @notice Remove an admin
-     * @param admin Address to remove as admin
-     */
-    function removeAdmin(address admin) external onlyAdmin {
-        if (admin == LibDiamond.contractOwner()) revert InvalidState();
-        _getAdminStorage().admins[admin] = false;
-    }
-
-    /**
-     * @notice Check if address is admin
-     * @param account Address to check
-     * @return bool indicating if address is admin
-     */
-    function isAdmin(address account) external view returns (bool) {
-        return _getAdminStorage().admins[account] || account == LibDiamond.contractOwner();
-    }
+    // Events
+    event OperationProposed(bytes32 indexed operationId, address indexed proposer, OperationType operationType);
+    event OperationSigned(bytes32 indexed operationId, address indexed signer);
+    event OperationExecuted(bytes32 indexed operationId, address indexed executor);
 }
