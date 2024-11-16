@@ -17,25 +17,18 @@ contract PetFacet is IPetFacet {
     /**
      * @dev Constants for game mechanics
      */
-    uint256 constant MIN_DAILY_SAVING = 0.000333 ether;
-    uint256 constant STATE_UPDATE_INTERVAL = 12 hours;
-    uint256 constant PREMIUM_PRICE = 0.1 ether;
+    uint256 private constant MIN_DAILY_SAVING = 0.000333 ether;
+    uint256 private constant STATE_UPDATE_INTERVAL = 12 hours;
+    uint256 private constant PREMIUM_PRICE = 0.1 ether;
 
     // Multipliers for food prices (relative to MIN_DAILY_SAVING)
-    uint256 constant BANANA_MULTIPLIER = 1;    // 0.000333 ETH
-    uint256 constant EGG_MULTIPLIER = 2;       // 0.000666 ETH
-    uint256 constant TOAST_MULTIPLIER = 3;     // 0.000999 ETH
-    uint256 constant DONUT_MULTIPLIER = 5;     // 0.001665 ETH
-    uint256 constant ONIGIRI_MULTIPLIER = 7;   // 0.002331 ETH
-    uint256 constant SALMON_MULTIPLIER = 10;   // 0.00333 ETH
-    uint256 constant STEAK_MULTIPLIER = 20;    // 0.00666 ETH
-
-    error InvalidDailyTarget();
-    error InsufficientPayment();
-    error PetAlreadyExists();
-    error PetDoesNotExist();
-    error InvalidFoodType();
-    error AlreadyPremium();
+    uint256 private constant BANANA_MULTIPLIER = 1;    // 0.000333 ETH
+    uint256 private constant EGG_MULTIPLIER = 2;       // 0.000666 ETH
+    uint256 private constant TOAST_MULTIPLIER = 3;     // 0.000999 ETH
+    uint256 private constant DONUT_MULTIPLIER = 5;     // 0.001665 ETH
+    uint256 private constant ONIGIRI_MULTIPLIER = 7;   // 0.002331 ETH
+    uint256 private constant SALMON_MULTIPLIER = 10;   // 0.00333 ETH
+    uint256 private constant STEAK_MULTIPLIER = 20;    // 0.00666 ETH
 
     /**
      * @dev Storage for pet-related data
@@ -46,7 +39,7 @@ contract PetFacet is IPetFacet {
     }
 
     /**
-      * @dev Get pet storage
+     * @dev Get pet storage
      */
     function _getPetStorage() internal pure returns (PetStorage storage ps) {
         bytes32 position = keccak256("snack.protocol.storage.pet");
@@ -58,8 +51,6 @@ contract PetFacet is IPetFacet {
 
     /**
      * @notice Initialize a new pet
-     * @param petType The type of pet to create
-     * @param dailyTarget Custom daily savings target
      */
     function initializePet(PetType petType, uint256 dailyTarget) external override {
         if (dailyTarget < MIN_DAILY_SAVING) revert InvalidDailyTarget();
@@ -86,7 +77,6 @@ contract PetFacet is IPetFacet {
 
     /**
      * @notice Feed the pet
-     * @param foodType The type of food to feed
      */
     function feed(FoodType foodType) external payable override {
         PetStorage storage ps = _getPetStorage();
@@ -102,7 +92,6 @@ contract PetFacet is IPetFacet {
 
     /**
      * @notice Get pet information
-     * @param owner The address to get pet info for
      */
     function getPet(address owner) external view override returns (Pet memory) {
         return _getPetStorage().pets[owner];
@@ -110,9 +99,8 @@ contract PetFacet is IPetFacet {
 
     /**
      * @notice Calculate current pet state
-     * @param owner The address of the pet owner
      */
-    function calculatePetState(address owner) public view override returns (PetState) {
+    function calculatePetState(address owner) external view override returns (PetState) {
         PetStorage storage ps = _getPetStorage();
         Pet storage pet = ps.pets[owner];
         if (pet.lastFed == 0) revert PetDoesNotExist();
@@ -140,14 +128,13 @@ contract PetFacet is IPetFacet {
 
     /**
      * @notice Calculate current happiness
-     * @param owner The address of the pet owner
      */
-    function calculateHappiness(address owner) public view override returns (uint256) {
+    function calculateHappiness(address owner) external view override returns (uint256) {
         PetStorage storage ps = _getPetStorage();
         Pet storage pet = ps.pets[owner];
         if (pet.lastFed == 0) revert PetDoesNotExist();
 
-        PetState currentState = calculatePetState(owner);
+        PetState currentState = this.calculatePetState(owner);
 
         // Happiness decreases based on state
         uint256 baseHappiness = pet.happiness;
@@ -162,8 +149,6 @@ contract PetFacet is IPetFacet {
 
     /**
      * @notice Get food price for specific food type
-     * @param foodType The food type to check
-     * @return price Food price in ETH
      */
     function getFoodPrice(FoodType foodType) public pure override returns (uint256 price) {
         uint256 multiplier = BANANA_MULTIPLIER;
@@ -180,7 +165,6 @@ contract PetFacet is IPetFacet {
 
     /**
      * @notice Update daily savings target
-     * @param newTarget New daily target
      */
     function updateDailyTarget(uint256 newTarget) external override {
         if (newTarget < MIN_DAILY_SAVING) revert InvalidDailyTarget();
@@ -212,9 +196,6 @@ contract PetFacet is IPetFacet {
 
     /**
      * @notice Internal function to update pet state
-     * @param owner The pet owner
-     * @param foodType The type of food used
-     * @param amount Amount being saved
      */
     function _updatePetState(address owner, FoodType foodType, uint256 amount) internal {
         PetStorage storage ps = _getPetStorage();

@@ -5,6 +5,7 @@ libs = ["lib"]
 solc = "0.8.19"
 optimizer = true
 optimizer_runs = 1000000
+viaIR = true
 
 remappings = [
     "@safe-smart-account/=lib/safe-smart-account/contracts/"

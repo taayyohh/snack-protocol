@@ -21,9 +21,9 @@ contract DiamondLoupeFacet is IDiamondLoupe {
         uint256 numFacets = ds.facetAddresses.length;
         facets_ = new Facet[](numFacets);
         for (uint256 i = 0; i < numFacets; i++) {
-            address facetAddress = ds.facetAddresses[i];
-            facets_[i].facetAddress = facetAddress;
-            facets_[i].functionSelectors = ds.facetFunctionSelectors[facetAddress].functionSelectors;
+            address facetAddr = ds.facetAddresses[i];
+            facets_[i].facetAddress = facetAddr;
+            facets_[i].functionSelectors = ds.facetFunctionSelectors[facetAddr].functionSelectors;
         }
     }
 

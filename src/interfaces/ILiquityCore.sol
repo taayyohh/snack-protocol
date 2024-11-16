@@ -70,4 +70,17 @@ interface ILUSD {
     function approve(address spender, uint256 amount) external returns (bool);
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
+    function totalSupply() external view returns (uint256);
+}
+
+/**
+ * @title ILiquityCore
+ * @notice Consolidated interface for Liquity's core protocol
+ */
+interface ILiquityCore is IBorrowerOperations, ITroveManager, IStabilityPool, ILUSD {
+    // Combines all methods from:
+    // - IBorrowerOperations
+    // - ITroveManager
+    // - IStabilityPool
+    // - ILUSD
 }

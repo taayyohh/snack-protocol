@@ -74,6 +74,16 @@ interface IPetFacet {
     event DailyTargetUpdated(address indexed owner, uint256 newTarget);
 
     /**
+     * @notice Errors
+     */
+    error InvalidDailyTarget();
+    error InsufficientPayment();
+    error PetAlreadyExists();
+    error PetDoesNotExist();
+    error InvalidFoodType();
+    error AlreadyPremium();
+
+    /**
      * @notice Initialize a new pet for the caller
      * @param petType The type of pet to create
      * @param dailyTarget Custom daily savings target (minimum 0.000333 ETH)
@@ -94,13 +104,33 @@ interface IPetFacet {
 
     /**
      * @notice Get pet information for an address
+     * @param owner The address to get pet info for
      */
     function getPet(address owner) external view returns (Pet memory);
 
     /**
+     * @notice Calculate current pet state
+     * @param owner The address of the pet owner
+     * @return Current state of the pet
+     */
+    function calculatePetState(address owner) external view returns (PetState);
+
+    /**
+     * @notice Calculate current happiness
+     * @param owner The address of the pet owner
+     * @return Current happiness level of the pet
+     */
+    function calculateHappiness(address owner) external view returns (uint256);
+
+    /**
      * @notice Get food price for specific food type
      * @param foodType The food type to check
-     * @return Food price in ETH
+     * @return price Food price in ETH
      */
     function getFoodPrice(FoodType foodType) external pure returns (uint256);
+
+    /**
+     * @notice Upgrade pet to premium status
+     */
+    function upgradeToPremium() external payable;
 }

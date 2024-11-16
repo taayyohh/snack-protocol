@@ -6,7 +6,7 @@ import { IAdminControl } from "../interfaces/IAdminControl.sol";
 import { ISavingsFacet } from "../interfaces/ISavingsFacet.sol";
 import { ILiquityIntegration } from "../interfaces/ILiquityIntegration.sol";
 import { Safe } from "../../lib/safe-smart-account/contracts/Safe.sol";
-
+import { Enum } from "../../lib/safe-smart-account/contracts/libraries/Enum.sol";
 /**
  * @title AdminControlFacet
  * @notice Enhanced admin controls with timelock and rate limiting
@@ -16,14 +16,11 @@ contract AdminControlFacet is IAdminControl {
      * @dev Storage for admin controls
      */
     struct AdminStorage {
-        // Existing storage
         PauseState currentState;
         mapping(address => bool) admins;
         mapping(EmergencyAction => bool) allowedActions;
         bool isShutdown;
         uint256 lastEmergencyAction;
-
-        // New storage for enhanced security
         mapping(bytes32 => TimelockOperation) pendingOperations;
         mapping(address => WithdrawalLimit) withdrawalLimits;
         uint256 globalWithdrawalLimit;
@@ -33,52 +30,11 @@ contract AdminControlFacet is IAdminControl {
         mapping(bytes32 => mapping(address => bool)) adminSignatures;
     }
 
-    /**
-     * @dev Timelock operation details
-     */
-    struct TimelockOperation {
-        bytes32 operationId;
-        uint256 timestamp;
-        uint256 signaturesRequired;
-        uint256 signaturesReceived;
-        bool executed;
-        OperationType operationType;
-        bytes parameters;
-    }
-
-    /**
-     * @dev Withdrawal rate limiting
-     */
-    struct WithdrawalLimit {
-        uint256 dailyLimit;
-        uint256 currentDay;
-        uint256 todayWithdrawn;
-    }
-
-    /**
-     * @dev Operation types for timelock
-     */
-    enum OperationType {
-        CHANGE_ADMIN,
-        UPDATE_LIMITS,
-        EMERGENCY_ACTION,
-        PROTOCOL_UPGRADE
-    }
-
     // Constants
-    uint256 constant TIMELOCK_DELAY = 24 hours;
-    uint256 constant EMERGENCY_TIMELOCK_DELAY = 1 hours;
-    uint256 constant MAX_DAILY_WITHDRAWAL = 100 ether;
-    uint256 constant WITHDRAWAL_WINDOW = 24 hours;
-
-    // New errors
-    error TimelockNotExpired();
-    error InsufficientSignatures();
-    error OperationNotFound();
-    error DailyLimitExceeded();
-    error AlreadyExecuted();
-    error InvalidTimelock();
-    error SignatureAlreadyAdded();
+    uint256 private constant TIMELOCK_DELAY = 24 hours;
+    uint256 private constant EMERGENCY_TIMELOCK_DELAY = 1 hours;
+    uint256 private constant MAX_DAILY_WITHDRAWAL = 100 ether;
+    uint256 private constant WITHDRAWAL_WINDOW = 24 hours;
 
     /**
      * @dev Get admin storage
@@ -112,11 +68,12 @@ contract AdminControlFacet is IAdminControl {
     }
 
     /**
-     * @dev Initialize admin controls
-     * @param minSignatures Minimum signatures required for admin actions
-     * @param initialAdmins Array of initial admin addresses
+     * @notice Initialize admin controls
      */
-    function initializeAdminControls(uint256 minSignatures, address[] calldata initialAdmins) external {
+    function initializeAdminControls(
+        uint256 minSignatures,
+        address[] calldata initialAdmins
+    ) external override {
         require(msg.sender == LibDiamond.contractOwner(), "Only owner");
         AdminStorage storage adminStorage = _getAdminStorage();
 
@@ -131,14 +88,11 @@ contract AdminControlFacet is IAdminControl {
 
     /**
      * @notice Propose a new timelock operation
-     * @param operationType Type of operation
-     * @param parameters Encoded parameters for the operation
-     * @return operationId The ID of the created operation
      */
     function proposeOperation(
         OperationType operationType,
         bytes calldata parameters
-    ) external onlyAdmin returns (bytes32 operationId) {
+    ) external override onlyAdmin returns (bytes32 operationId) {
         AdminStorage storage adminStorage = _getAdminStorage();
 
         operationId = keccak256(abi.encodePacked(
@@ -147,7 +101,6 @@ contract AdminControlFacet is IAdminControl {
             parameters
         ));
 
-        // Create new timelock operation
         uint256 delay = operationType == OperationType.EMERGENCY_ACTION
             ? EMERGENCY_TIMELOCK_DELAY
             : TIMELOCK_DELAY;
@@ -156,23 +109,22 @@ contract AdminControlFacet is IAdminControl {
             operationId: operationId,
             timestamp: block.timestamp + delay,
             signaturesRequired: adminStorage.minAdminSignatures,
-            signaturesReceived: 1, // Proposer automatically signs
+            signaturesReceived: 1,
             executed: false,
             operationType: operationType,
             parameters: parameters
         });
 
-        // Record proposer's signature
         adminStorage.adminSignatures[operationId][msg.sender] = true;
 
         emit OperationProposed(operationId, msg.sender, operationType);
+        return operationId;
     }
 
     /**
      * @notice Sign a pending operation
-     * @param operationId The operation to sign
      */
-    function signOperation(bytes32 operationId) external onlyAdmin {
+    function signOperation(bytes32 operationId) external override onlyAdmin {
         AdminStorage storage adminStorage = _getAdminStorage();
         TimelockOperation storage operation = adminStorage.pendingOperations[operationId];
 
@@ -188,9 +140,8 @@ contract AdminControlFacet is IAdminControl {
 
     /**
      * @notice Execute a timelock operation
-     * @param operationId The operation to execute
      */
-    function executeOperation(bytes32 operationId) external onlyAdmin {
+    function executeOperation(bytes32 operationId) external override onlyAdmin {
         AdminStorage storage adminStorage = _getAdminStorage();
         TimelockOperation storage operation = adminStorage.pendingOperations[operationId];
 
@@ -213,8 +164,24 @@ contract AdminControlFacet is IAdminControl {
     }
 
     /**
+     * @notice Set protocol pause state
+     */
+    function setPauseState(PauseState state) external override onlyAdmin notShutdown {
+        AdminStorage storage adminStorage = _getAdminStorage();
+        if (state == adminStorage.currentState) revert AlreadyPaused();
+
+        adminStorage.currentState = state;
+        adminStorage.lastEmergencyAction = block.timestamp;
+
+        adminStorage.allowedActions[EmergencyAction.PAUSE] = true;
+        adminStorage.allowedActions[EmergencyAction.WITHDRAW] =
+            (state == PauseState.WITHDRAWALS_ONLY || state == PauseState.ACTIVE);
+
+        emit ProtocolPaused(state);
+    }
+
+    /**
      * @notice Execute emergency withdrawal with rate limiting
-     * @param user Address to withdraw funds for
      */
     function emergencyWithdraw(address user) external override onlyAdmin {
         AdminStorage storage adminStorage = _getAdminStorage();
@@ -223,68 +190,74 @@ contract AdminControlFacet is IAdminControl {
             revert InvalidState();
         }
 
-        // Check and update withdrawal limits
         _checkWithdrawalLimits(user);
 
-        // Get user's Safe and savings info
         ISavingsFacet savings = ISavingsFacet(address(this));
-        address safeAddress = savings.getUserSafe(user);
+        address payable safeAddress = payable(savings.getUserSafe(user));
         if (safeAddress == address(0)) revert InvalidState();
 
-        // Get total withdrawable amount
-        uint256 withdrawAmount = Safe(safeAddress).getBalance();
+        uint256 withdrawAmount = address(safeAddress).balance;
         if (withdrawAmount == 0) revert InvalidAmount();
 
-        // Update withdrawal tracking
         adminStorage.withdrawalLimits[user].todayWithdrawn += withdrawAmount;
         adminStorage.currentDailyWithdrawals += withdrawAmount;
 
-        // Execute withdrawal through Safe
         _executeWithdrawal(safeAddress, user, withdrawAmount);
 
         emit EmergencyWithdrawal(user, withdrawAmount);
     }
 
     /**
-     * @notice Update protocol pause state with timelock
-     * @param state New pause state
+     * @notice Get current protocol state
      */
-    function setPauseState(PauseState state) external override onlyAdmin notShutdown {
+    function getProtocolState() external view override returns (PauseState) {
+        return _getAdminStorage().currentState;
+    }
+
+    /**
+     * @notice Check if specific action is allowed
+     */
+    function isActionAllowed(EmergencyAction action) external view override returns (bool) {
+        return _getAdminStorage().allowedActions[action];
+    }
+
+    /**
+     * @notice Get operation details
+     */
+    function getOperation(bytes32 operationId) external view override returns (TimelockOperation memory operation) {
+        return _getAdminStorage().pendingOperations[operationId];
+    }
+
+    /**
+     * @notice Get withdrawal limits for a user
+     */
+    function getWithdrawalLimit(address user) external view override returns (WithdrawalLimit memory limit) {
+        return _getAdminStorage().withdrawalLimits[user];
+    }
+
+    /**
+     * @notice Get global withdrawal limit
+     */
+    function getGlobalWithdrawalLimit() external view override returns (uint256 limit) {
+        return _getAdminStorage().globalWithdrawalLimit;
+    }
+
+    /**
+     * @notice Check if address is admin
+     */
+    function isAdmin(address account) external view override returns (bool) {
         AdminStorage storage adminStorage = _getAdminStorage();
-        if (state == adminStorage.currentState) revert AlreadyPaused();
-
-        bytes32 operationId = keccak256(abi.encodePacked("PAUSE", state, block.timestamp));
-        TimelockOperation storage operation = adminStorage.pendingOperations[operationId];
-
-        if (operation.timestamp == 0) {
-            // Create new timelock operation
-            operation.timestamp = block.timestamp + EMERGENCY_TIMELOCK_DELAY;
-            operation.signaturesRequired = adminStorage.minAdminSignatures;
-            operation.parameters = abi.encode(state);
-        }
-
-        if (block.timestamp < operation.timestamp) revert TimelockNotExpired();
-
-        // Update state
-        adminStorage.currentState = state;
-        adminStorage.lastEmergencyAction = block.timestamp;
-
-        // Update allowed actions based on state
-        adminStorage.allowedActions[EmergencyAction.PAUSE] = true;
-        adminStorage.allowedActions[EmergencyAction.WITHDRAW] =
-            (state == PauseState.WITHDRAWALS_ONLY || state == PauseState.ACTIVE);
-
-        emit ProtocolPaused(state);
+        return adminStorage.admins[account] || account == LibDiamond.contractOwner();
     }
 
     // Internal functions
 
-    function _executeWithdrawal(address safeAddress, address user, uint256 amount) internal {
-        try Safe(safeAddress).execTransaction(
+    function _executeWithdrawal(address payable safeAddress, address user, uint256 amount) internal {
+        try Safe(safeAddress).execTransaction{value: 0}(
             payable(user),
             amount,
             "",
-            Safe.Operation.Call,
+            Enum.Operation.Call,
             0,
             0,
             0,
@@ -302,7 +275,6 @@ contract AdminControlFacet is IAdminControl {
         AdminStorage storage adminStorage = _getAdminStorage();
         WithdrawalLimit storage userLimit = adminStorage.withdrawalLimits[user];
 
-        // Reset daily limits if needed
         if (block.timestamp >= adminStorage.lastWithdrawalReset + WITHDRAWAL_WINDOW) {
             adminStorage.lastWithdrawalReset = block.timestamp;
             adminStorage.currentDailyWithdrawals = 0;
@@ -313,7 +285,6 @@ contract AdminControlFacet is IAdminControl {
             userLimit.todayWithdrawn = 0;
         }
 
-        // Check limits
         if (userLimit.todayWithdrawn >= userLimit.dailyLimit) revert DailyLimitExceeded();
         if (adminStorage.currentDailyWithdrawals >= adminStorage.globalWithdrawalLimit) {
             revert DailyLimitExceeded();
@@ -337,6 +308,9 @@ contract AdminControlFacet is IAdminControl {
 
         adminStorage.globalWithdrawalLimit = newGlobalLimit;
         adminStorage.minAdminSignatures = newMinSignatures;
+
+        emit GlobalLimitUpdated(newGlobalLimit);
+        emit MinSignaturesUpdated(newMinSignatures);
     }
 
     function _executeAdminChange(bytes memory parameters) internal {
@@ -348,10 +322,7 @@ contract AdminControlFacet is IAdminControl {
         } else {
             adminStorage.admins[admin] = false;
         }
-    }
 
-    // Events
-    event OperationProposed(bytes32 indexed operationId, address indexed proposer, OperationType operationType);
-    event OperationSigned(bytes32 indexed operationId, address indexed signer);
-    event OperationExecuted(bytes32 indexed operationId, address indexed executor);
+        emit AdminChanged(msg.sender, admin);
+    }
 }

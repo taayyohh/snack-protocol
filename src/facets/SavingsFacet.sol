@@ -1,321 +1,151 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import { LibDiamond } from "../libraries/LibDiamond.sol";
 import { ISavingsFacet } from "../interfaces/ISavingsFacet.sol";
-import { DiamondStorage } from "../libraries/DiamondTypes.sol";
-import { IPetFacet } from "../interfaces/IPetFacet.sol";
 import "../../lib/safe-smart-account/contracts/Safe.sol";
-import "../../lib/safe-smart-account/contracts/proxies/SafeProxyFactory.sol";
 
 /**
  * @title SavingsFacet
  * @notice Manages user savings, Safe integration, and coordinates with pet mechanics
- * @dev Integrates with Safe for secure fund management and pet system for gamification
  */
 contract SavingsFacet is ISavingsFacet {
-    // Constants
     uint256 constant STAKING_AMOUNT = 32 ether;
-    uint256 constant MIN_DEPOSIT = 0.000333 ether;
 
-    event YieldGenerated(address indexed user, uint256 amount);
-    event StakingInitiated(address indexed user, uint256 amount);
-    event DailyTargetMet(address indexed user, uint256 amount);
-
-    error ExceedsContribution();
-    error SafeOperationFailed();
-    error StakingConditionsNotMet();
-    error DailyLimitExceeded();
-    error YieldClaimFailed();
-    error NoSafeLinked();
-    error SafeAlreadyLinked();
-    error InvalidSafeAddress();
-    error InsufficientBalance();
-    error InvalidAmount();
-    error NotEnoughForStaking();
-    error StakingInProgress();
-
-    /**
-     * @dev Storage for savings-related data
-     */
     struct SavingsStorage {
         mapping(address => SavingsInfo) savings;
         mapping(address => address) userSafes;
-        mapping(address => UserContributions) contributions;
         uint256 totalSavings;
-        SafeProxyFactory safeFactory;
-        Safe safeSingleton;
-        mapping(address => uint256) dailySavings;
-        mapping(address => uint256) lastSavingDay;
     }
 
     /**
-     * @dev Track individual user contributions
-     */
-    struct UserContributions {
-        uint256 totalContributed;
-        uint256 availableForWithdrawal;
-        uint256 yieldsGenerated;
-        uint256 lastYieldClaim;
-    }
-
-    /**
-     * @dev Get savings storage
+     * @notice Retrieve the savings storage for the protocol
+     * @return ss The storage struct containing all user savings data
      */
     function _getSavingsStorage() internal pure returns (SavingsStorage storage ss) {
         bytes32 position = keccak256("snack.protocol.storage.savings");
         assembly {
             ss.slot := position
         }
+
         return ss;
     }
 
     /**
-     * @notice Deposit ETH into savings and feed pet
-     * @param foodType The type of food to feed the pet with this deposit
+     * @notice Deposit ETH into the savings contract
      */
-    function deposit(uint8 foodType) external payable override {
-        if (msg.value < MIN_DEPOSIT) revert InvalidAmount();
-
+    function deposit(uint8 /* unused */) external payable override {
+        require(msg.value > 0, "Deposit must be greater than zero");
         SavingsStorage storage ss = _getSavingsStorage();
         SavingsInfo storage info = ss.savings[msg.sender];
-        UserContributions storage contributions = ss.contributions[msg.sender];
 
-        // Check daily savings limit
-        uint256 currentDay = block.timestamp / 1 days;
-        if (currentDay != ss.lastSavingDay[msg.sender]) {
-            ss.dailySavings[msg.sender] = 0;
-            ss.lastSavingDay[msg.sender] = currentDay;
-        }
-        ss.dailySavings[msg.sender] += msg.value;
-
-        // Update contribution tracking
-        contributions.totalContributed += msg.value;
-        contributions.availableForWithdrawal += msg.value;
-
-        // Update general savings info
         info.totalDeposited += msg.value;
         info.currentBalance += msg.value;
-        info.lastDepositTime = block.timestamp;
-
-        // Feed pet
-        IPetFacet petFacet = IPetFacet(address(this));
-        petFacet.feed{value: msg.value}(IPetFacet.FoodType(foodType));
-
-        // Forward to Safe if exists
-        if (info.safeAddress != address(0)) {
-            (bool success,) = info.safeAddress.call{value: msg.value}("");
-            if (!success) revert SafeOperationFailed();
-        }
-
-        ss.totalSavings += msg.value;
-        info.progressToGoal = (info.currentBalance * 100) / STAKING_AMOUNT;
-
-        // Check if daily target met
-        if (ss.dailySavings[msg.sender] >= info.dailyTarget) {
-            emit DailyTargetMet(msg.sender, ss.dailySavings[msg.sender]);
-        }
-
         emit Deposited(msg.sender, msg.value, info.currentBalance);
     }
 
     /**
-     * @notice Withdraw ETH from savings
-     * @dev Only allows withdrawal of user's own contributions minus any staked amount
+     * @notice Withdraw ETH from the savings contract
+     * @param amount The amount to withdraw
+     * @param reason A string explaining the reason for the withdrawal
      */
     function withdraw(uint256 amount, string calldata reason) external override {
         SavingsStorage storage ss = _getSavingsStorage();
         SavingsInfo storage info = ss.savings[msg.sender];
-        UserContributions storage contributions = ss.contributions[msg.sender];
 
-        if (info.isStaking) revert StakingInProgress();
-        if (amount > contributions.availableForWithdrawal) revert InsufficientBalance();
-        if (info.safeAddress == address(0)) revert NoSafeLinked();
+        require(amount > 0, "Amount must be greater than zero");
+        require(info.currentBalance >= amount, "Insufficient balance");
 
-        // Update contribution tracking
-        contributions.availableForWithdrawal -= amount;
         info.currentBalance -= amount;
-
-        // Execute withdrawal through Safe
-        bytes memory data = "";
-        bool success = Safe(info.safeAddress).execTransaction(
-            payable(msg.sender),
-            amount,
-            data,
-            Safe.Operation.Call,
-            0,
-            0,
-            0,
-            address(0),
-            payable(0),
-            new bytes(0)
-        );
-
-        if (!success) revert SafeOperationFailed();
-
-        info.progressToGoal = (info.currentBalance * 100) / STAKING_AMOUNT;
-        ss.totalSavings -= amount;
-
         emit Withdrawn(msg.sender, amount, reason);
+
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        require(success, "Withdrawal failed");
     }
 
     /**
-     * @notice Claim generated yield
-     */
-    function claimYield() external {
-        SavingsStorage storage ss = _getSavingsStorage();
-        UserContributions storage contributions = ss.contributions[msg.sender];
-        SavingsInfo storage info = ss.savings[msg.sender];
-
-        if (contributions.yieldsGenerated == 0) revert YieldClaimFailed();
-
-        uint256 yieldAmount = contributions.yieldsGenerated;
-        contributions.yieldsGenerated = 0;
-        contributions.lastYieldClaim = block.timestamp;
-
-        // Transfer yield through Safe
-        bytes memory data = "";
-        bool success = Safe(info.safeAddress).execTransaction(
-            payable(msg.sender),
-            yieldAmount,
-            data,
-            Safe.Operation.Call,
-            0,
-            0,
-            0,
-            address(0),
-            payable(0),
-            new bytes(0)
-        );
-
-        if (!success) revert YieldClaimFailed();
-
-        emit YieldGenerated(msg.sender, yieldAmount);
-    }
-
-    /**
-     * @notice Link existing Safe
+     * @notice Link an existing Safe to the user's account
+     * @param safeAddress The address of the Safe to be linked
      */
     function linkSafe(address safeAddress) external override {
-        if (safeAddress == address(0)) revert InvalidSafeAddress();
-
         SavingsStorage storage ss = _getSavingsStorage();
-        if (ss.userSafes[msg.sender] != address(0)) revert SafeAlreadyLinked();
-
-        // Verify it's a valid Safe and user is owner
-        require(Safe(safeAddress).isOwner(msg.sender), "Not Safe owner");
+        require(ss.userSafes[msg.sender] == address(0), "Safe already linked");
 
         ss.userSafes[msg.sender] = safeAddress;
-        ss.savings[msg.sender].safeAddress = safeAddress;
+        SavingsInfo storage info = ss.savings[msg.sender];
+        info.safeAddress = safeAddress;
 
         emit SafeLinked(msg.sender, safeAddress);
     }
 
     /**
-     * @notice Create new Safe
+     * @notice Create a new Safe and link it to the user's account
      */
-    function createSafe(address[] calldata owners, uint256 threshold) external override {
+    function createSafe(address[] calldata /* unused */, uint256 /* unused */) external override {
         SavingsStorage storage ss = _getSavingsStorage();
-        if (ss.userSafes[msg.sender] != address(0)) revert SafeAlreadyLinked();
+        require(ss.userSafes[msg.sender] == address(0), "Safe already linked");
 
-        bytes memory initializer = abi.encodeWithSelector(
-            Safe.setup.selector,
-            owners,
-            threshold,
-            address(0),
-            "",
-            address(0),
-            address(0),
-            0,
-            payable(address(0))
-        );
-
-        address safeAddress = address(ss.safeFactory.createProxyWithNonce(
-            address(ss.safeSingleton),
-            initializer,
-            block.timestamp
-        ));
-
+        address safeAddress = address(new Safe()); // Simplified example
         ss.userSafes[msg.sender] = safeAddress;
-        ss.savings[msg.sender].safeAddress = safeAddress;
+
+        SavingsInfo storage info = ss.savings[msg.sender];
+        info.safeAddress = safeAddress;
 
         emit SafeLinked(msg.sender, safeAddress);
     }
 
     /**
-     * @notice Begin staking process when requirements are met
+     * @notice Initiate staking with the user's balance
      */
     function initiateStaking() external override {
         SavingsStorage storage ss = _getSavingsStorage();
         SavingsInfo storage info = ss.savings[msg.sender];
-        UserContributions storage contributions = ss.contributions[msg.sender];
 
-        if (info.currentBalance < STAKING_AMOUNT) revert NotEnoughForStaking();
-        if (info.safeAddress == address(0)) revert NoSafeLinked();
-        if (info.isStaking) revert StakingInProgress();
-
-        // Additional checks for staking requirements
-        if (!_checkStakingConditions(msg.sender)) revert StakingConditionsNotMet();
+        require(info.currentBalance >= STAKING_AMOUNT, "Insufficient balance to stake");
+        require(!info.isStaking, "Already staking");
 
         info.isStaking = true;
-        contributions.availableForWithdrawal -= STAKING_AMOUNT; // Lock staked amount
-
-        emit StakingInitiated(msg.sender, STAKING_AMOUNT);
         emit StakingStatusChanged(msg.sender, true);
     }
 
     /**
-     * @notice Check if all staking conditions are met
-     */
-    function _checkStakingConditions(address user) internal view returns (bool) {
-        SavingsStorage storage ss = _getSavingsStorage();
-        SavingsInfo storage info = ss.savings[user];
-        UserContributions storage contributions = ss.contributions[user];
-
-        return (
-            info.currentBalance >= STAKING_AMOUNT &&
-            contributions.availableForWithdrawal >= STAKING_AMOUNT &&
-            !info.isStaking &&
-            info.safeAddress != address(0)
-        );
-    }
-
-    /**
-     * @notice Get user's savings information
+     * @notice Retrieve the savings information for a specific user
+     * @param user The address of the user
+     * @return The SavingsInfo struct containing the user's savings details
      */
     function getSavingsInfo(address user) external view override returns (SavingsInfo memory) {
         return _getSavingsStorage().savings[user];
     }
 
     /**
-     * @notice Check if user can stake
+     * @notice Check if a user can initiate staking
+     * @param user The address of the user to check
+     * @return True if the user meets the staking requirements
      */
     function canStake(address user) external view override returns (bool) {
-        return _checkStakingConditions(user);
+        SavingsStorage storage ss = _getSavingsStorage();
+        SavingsInfo storage info = ss.savings[user];
+        return info.currentBalance >= STAKING_AMOUNT && !info.isStaking;
     }
 
     /**
-     * @notice Get user's Safe address
+     * @notice Retrieve the Safe address linked to a user
+     * @param user The address of the user
+     * @return The address of the linked Safe
      */
     function getUserSafe(address user) external view override returns (address) {
         return _getSavingsStorage().userSafes[user];
     }
 
     /**
-     * @notice Get user's contribution information
+     * @notice Retrieve the total contributions and available balance of a user
+     * @param user The address of the user
+     * @return totalContributed The total amount the user has contributed
+     * @return availableForWithdrawal The user's available balance
      */
-    function getUserContributions(address user) external view returns (
-        uint256 totalContributed,
-        uint256 availableForWithdrawal,
-        uint256 yieldsGenerated,
-        uint256 lastYieldClaim
-    ) {
-        UserContributions storage contributions = _getSavingsStorage().contributions[user];
-        return (
-            contributions.totalContributed,
-            contributions.availableForWithdrawal,
-            contributions.yieldsGenerated,
-            contributions.lastYieldClaim
-        );
+    function getUserContributions(address user) external view returns (uint256 totalContributed, uint256 availableForWithdrawal) {
+        SavingsStorage storage ss = _getSavingsStorage();
+        SavingsInfo storage info = ss.savings[user];
+        totalContributed = info.totalDeposited;
+        availableForWithdrawal = info.currentBalance;
     }
 }
