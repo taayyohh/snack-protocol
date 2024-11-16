@@ -77,9 +77,8 @@ interface ISavingsFacet {
 
     /**
      * @notice Deposit ETH directly into a user's Safe
-     * @param safeAddress Address of the Safe receiving the deposit
      */
-    function depositToSafe(address safeAddress) external payable;
+    function depositToSafe() external payable;
 
     /**
      * @notice Withdraw ETH from savings

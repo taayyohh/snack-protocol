@@ -169,4 +169,12 @@ interface IPetFacet {
      * @param coOwner The address to add as a co-owner
      */
     function addCoOwner(address coOwner) external;
+
+
+    /**
+     * @notice Reduces the hunger level of a pet based on a specified number of levels
+     * @param owner The address of the pet owner
+     * @param levels The number of hunger levels to reduce
+     */
+    function reduceHunger(address owner, uint256 levels) external;
 }

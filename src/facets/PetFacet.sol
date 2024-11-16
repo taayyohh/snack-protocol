@@ -163,10 +163,11 @@ contract PetFacet is IPetFacet {
         if (msg.value < price) revert InsufficientPayment();
 
         SavingsFacet savingsFacet = SavingsFacet(address(this));
-        savingsFacet.depositToSafe{value: msg.value}(msg.sender);
+        savingsFacet.depositToSafe{value: msg.value}();
 
         _updatePetState(msg.sender, foodType, msg.value);
     }
+
 
     /**
      * @notice Update the daily savings target for the user's pet
@@ -291,4 +292,33 @@ contract PetFacet is IPetFacet {
         uint256 baseBoost = foodType == FoodType.STEAK ? 20 : foodType == FoodType.SALMON ? 15 : 10;
         return isPremium ? baseBoost + 5 : baseBoost;
     }
+
+/**
+ * @notice Reduce the hunger level of the user's pet
+ * @param owner The address of the pet owner
+ * @param levels The number of hunger levels to lose
+ */
+    function reduceHunger(address owner, uint256 levels) external {
+        PetStorage storage ps = _getPetStorage();
+        Pet storage pet = ps.pets[owner];
+
+        // Ensure the pet exists
+        if (pet.lastFed == 0) revert PetDoesNotExist();
+
+        // Get the current state as an integer
+        uint8 currentState = uint8(pet.state);
+
+        // Calculate the new state after reducing levels
+        if (currentState + levels >= uint8(PetState.STARVING)) {
+            // If levels exceed the lowest state, set to STARVING
+            pet.state = PetState.STARVING;
+        } else {
+            // Otherwise, decrement the state by the given levels
+            pet.state = PetState(currentState + uint8(levels));
+        }
+
+        // Emit the PetStateChanged event with the updated happiness
+        emit PetStateChanged(owner, pet.state, pet.happiness);
+    }
+
 }

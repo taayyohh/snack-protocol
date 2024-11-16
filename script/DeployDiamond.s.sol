@@ -228,6 +228,7 @@ contract DeployDiamond is Script {
         savingsSelectors[9] = SavingsFacet.getUserContributions.selector;
         console.log("Added getUserContributions selector:", vm.toString(SavingsFacet.getUserContributions.selector));
 
+
         cuts[4] = IDiamondCut.FacetCut({
             facetAddress: address(savingsFacet),
             action: IDiamondCut.FacetCutAction.Add,
