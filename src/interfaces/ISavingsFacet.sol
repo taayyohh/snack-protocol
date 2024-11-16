@@ -3,7 +3,7 @@ pragma solidity ^0.8.19;
 
 /**
  * @title ISavingsFacet
- * @notice Interface for savings functionality and Safe integration
+ * @notice Interface for managing user savings, Safe integration, and staking coordination
  */
 interface ISavingsFacet {
     /**
@@ -11,44 +11,65 @@ interface ISavingsFacet {
      */
     struct SavingsInfo {
         uint256 totalDeposited;      // Total amount user has deposited
-        uint256 currentBalance;       // Current balance including yields
-        uint256 lastDepositTime;      // Timestamp of last deposit
+        uint256 currentBalance;      // Current balance including yields
+        uint256 lastDepositTime;     // Timestamp of last deposit
         bool isStaking;              // Whether funds are being staked
         address safeAddress;         // User's Safe address
-        uint256 progressToGoal;      // Progress towards 32 ETH (in percentage)
-        uint256 dailyTarget;         // Daily savings target
     }
 
     /**
      * @notice Emitted when a deposit is made
+     * @param user Address of the user making the deposit
+     * @param amount Amount of ETH deposited
+     * @param newTotal New total savings balance
      */
     event Deposited(address indexed user, uint256 amount, uint256 newTotal);
 
     /**
      * @notice Emitted when a withdrawal is made
+     * @param user Address of the user making the withdrawal
+     * @param amount Amount of ETH withdrawn
+     * @param reason Reason for the withdrawal
      */
     event Withdrawn(address indexed user, uint256 amount, string reason);
 
     /**
      * @notice Emitted when a Safe is created or linked
+     * @param user Address of the user linking the Safe
+     * @param safeAddress Address of the linked Safe
      */
     event SafeLinked(address indexed user, address indexed safeAddress);
 
     /**
      * @notice Emitted when staking status changes
+     * @param user Address of the user changing staking status
+     * @param isStaking Boolean indicating if staking is active
      */
     event StakingStatusChanged(address indexed user, bool isStaking);
 
     /**
-     * @notice Deposit ETH into savings
-     * @param foodType Type of food to feed pet with this deposit
+     * @notice Emitted when funds are allocated to Liquity
+     * @param user Address of the user allocating funds
+     * @param liquityFacetAddress Address of the Liquity integration facet
+     * @param amount Amount of ETH allocated
      */
-    function deposit(uint8 foodType) external payable;
+    event AllocatedToLiquity(address indexed user, address indexed liquityFacetAddress, uint256 amount);
+
+    /**
+     * @notice Deposit ETH into savings
+     */
+    function deposit() external payable;
+
+    /**
+     * @notice Deposit ETH directly into a user's Safe
+     * @param safeAddress Address of the Safe receiving the deposit
+     */
+    function depositToSafe(address safeAddress) external payable;
 
     /**
      * @notice Withdraw ETH from savings
      * @param amount Amount to withdraw
-     * @param reason Reason for withdrawal
+     * @param reason Reason for the withdrawal
      */
     function withdraw(uint256 amount, string calldata reason) external;
 
@@ -64,6 +85,13 @@ interface ISavingsFacet {
      * @param threshold Number of required confirmations
      */
     function createSafe(address[] calldata owners, uint256 threshold) external;
+
+    /**
+     * @notice Allocate ETH from a user's Safe to LiquityStakingFacet
+     * @param amount Amount of ETH to allocate
+     * @param liquityFacetAddress Address of the LiquityStakingFacet contract
+     */
+    function allocateToLiquity(uint256 amount, address liquityFacetAddress) external;
 
     /**
      * @notice Begin staking process when 32 ETH is reached
@@ -87,7 +115,15 @@ interface ISavingsFacet {
     /**
      * @notice Get the Safe address for a user
      * @param user Address to query
-     * @return Safe address
+     * @return Address of the user's linked Safe
      */
     function getUserSafe(address user) external view returns (address);
+
+    /**
+     * @notice Retrieve the total contributions and available balance of a user
+     * @param user The address of the user
+     * @return totalDeposited Total amount the user has contributed
+     * @return currentBalance The user's current available balance
+     */
+    function getUserContributions(address user) external view returns (uint256 totalDeposited, uint256 currentBalance);
 }

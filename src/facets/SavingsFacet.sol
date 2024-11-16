@@ -6,15 +6,18 @@ import "../../lib/safe-smart-account/contracts/Safe.sol";
 
 /**
  * @title SavingsFacet
- * @notice Manages user savings, Safe integration, and coordinates with pet mechanics
+ * @notice Manages user savings, Safe integration, and provides functionality to allocate funds to Liquity.
  */
 contract SavingsFacet is ISavingsFacet {
-    uint256 constant STAKING_AMOUNT = 32 ether;
+    uint256 public constant STAKING_AMOUNT = 32 ether;
 
+    /**
+     * @dev Storage structure for managing savings
+     */
     struct SavingsStorage {
-        mapping(address => SavingsInfo) savings;
-        mapping(address => address) userSafes;
-        uint256 totalSavings;
+        mapping(address => SavingsInfo) savings; // User-specific savings information
+        mapping(address => address) userSafes;   // Mapping of users to their linked Safe addresses
+        uint256 totalSavings;                   // Total savings in the protocol
     }
 
     /**
@@ -31,22 +34,45 @@ contract SavingsFacet is ISavingsFacet {
     }
 
     /**
-     * @notice Deposit ETH into the savings contract
+     * @notice Deposit ETH into the user's savings
      */
-    function deposit(uint8 /* unused */) external payable override {
+    function deposit() external payable override {
         require(msg.value > 0, "Deposit must be greater than zero");
+
         SavingsStorage storage ss = _getSavingsStorage();
         SavingsInfo storage info = ss.savings[msg.sender];
 
         info.totalDeposited += msg.value;
         info.currentBalance += msg.value;
+
+        ss.totalSavings += msg.value;
+
         emit Deposited(msg.sender, msg.value, info.currentBalance);
     }
 
     /**
-     * @notice Withdraw ETH from the savings contract
+     * @notice Deposit ETH directly into a user's Safe
+     * @param safeAddress Address of the Safe receiving the deposit
+     */
+    function depositToSafe(address safeAddress) external payable override {
+        require(msg.value > 0, "Deposit must be greater than zero");
+
+        SavingsStorage storage ss = _getSavingsStorage();
+        require(ss.userSafes[msg.sender] == safeAddress, "Unauthorized Safe access");
+
+        SavingsInfo storage info = ss.savings[msg.sender];
+        info.totalDeposited += msg.value;
+        info.currentBalance += msg.value;
+
+        ss.totalSavings += msg.value;
+
+        emit Deposited(safeAddress, msg.value, info.currentBalance);
+    }
+
+    /**
+     * @notice Withdraw ETH from the user's savings
      * @param amount The amount to withdraw
-     * @param reason A string explaining the reason for the withdrawal
+     * @param reason Reason for the withdrawal
      */
     function withdraw(uint256 amount, string calldata reason) external override {
         SavingsStorage storage ss = _getSavingsStorage();
@@ -63,14 +89,49 @@ contract SavingsFacet is ISavingsFacet {
     }
 
     /**
+     * @notice Create and link a new Safe for the user
+     * @param owners Array of Safe owner addresses
+     * @param threshold Number of required confirmations
+     */
+    function createSafe(address[] calldata owners, uint256 threshold) external override {
+        SavingsStorage storage ss = _getSavingsStorage();
+        require(ss.userSafes[msg.sender] == address(0), "Safe already linked");
+
+        // Create a new Safe instance
+        Safe safe = new Safe();
+
+        // Setup the Safe with the specified owners and threshold
+        safe.setup(
+            owners,
+            threshold,
+            address(0),       // No initial delegate call (target address)
+            bytes(""),        // No initial delegate call (data payload)
+            address(0),       // Fallback handler
+            address(0),       // No payment token (ETH is used)
+            0,                // No payment amount
+            payable(msg.sender) // Refund receiver (msg.sender)
+        );
+
+        // Store the Safe address in userSafes mapping
+        ss.userSafes[msg.sender] = address(safe);
+
+        // Update the user's savings information with the Safe address
+        SavingsInfo storage info = ss.savings[msg.sender];
+        info.safeAddress = address(safe);
+
+        emit SafeLinked(msg.sender, address(safe));
+    }
+
+    /**
      * @notice Link an existing Safe to the user's account
-     * @param safeAddress The address of the Safe to be linked
+     * @param safeAddress Address of the Safe to link
      */
     function linkSafe(address safeAddress) external override {
         SavingsStorage storage ss = _getSavingsStorage();
         require(ss.userSafes[msg.sender] == address(0), "Safe already linked");
 
         ss.userSafes[msg.sender] = safeAddress;
+
         SavingsInfo storage info = ss.savings[msg.sender];
         info.safeAddress = safeAddress;
 
@@ -78,23 +139,31 @@ contract SavingsFacet is ISavingsFacet {
     }
 
     /**
-     * @notice Create a new Safe and link it to the user's account
+     * @notice Allocate ETH from the user's Safe to LiquityStakingFacet
+     * @param amount The amount of ETH to allocate
+     * @param liquityFacetAddress Address of the LiquityStakingFacet contract
      */
-    function createSafe(address[] calldata /* unused */, uint256 /* unused */) external override {
+    function allocateToLiquity(uint256 amount, address liquityFacetAddress) external {
         SavingsStorage storage ss = _getSavingsStorage();
-        require(ss.userSafes[msg.sender] == address(0), "Safe already linked");
+        address safeAddress = ss.userSafes[msg.sender];
 
-        address safeAddress = address(new Safe()); // Simplified example
-        ss.userSafes[msg.sender] = safeAddress;
+        require(safeAddress != address(0), "No Safe linked");
+        require(amount > 0, "Amount must be greater than zero");
+        require(safeAddress.balance >= amount, "Insufficient balance in Safe");
 
+        // Transfer ETH from Safe to LiquityStakingFacet
+        (bool success, ) = payable(liquityFacetAddress).call{value: amount}("");
+        require(success, "Transfer to Liquity failed");
+
+        // Update user's savings information
         SavingsInfo storage info = ss.savings[msg.sender];
-        info.safeAddress = safeAddress;
+        info.currentBalance -= amount;
 
-        emit SafeLinked(msg.sender, safeAddress);
+        emit AllocatedToLiquity(msg.sender, liquityFacetAddress, amount);
     }
 
     /**
-     * @notice Initiate staking with the user's balance
+     * @notice Begin the staking process once 32 ETH is reached
      */
     function initiateStaking() external override {
         SavingsStorage storage ss = _getSavingsStorage();
@@ -104,33 +173,35 @@ contract SavingsFacet is ISavingsFacet {
         require(!info.isStaking, "Already staking");
 
         info.isStaking = true;
+
         emit StakingStatusChanged(msg.sender, true);
     }
 
     /**
-     * @notice Retrieve the savings information for a specific user
+     * @notice Retrieve a user's savings information
      * @param user The address of the user
-     * @return The SavingsInfo struct containing the user's savings details
+     * @return SavingsInfo struct containing the user's savings details
      */
     function getSavingsInfo(address user) external view override returns (SavingsInfo memory) {
         return _getSavingsStorage().savings[user];
     }
 
     /**
-     * @notice Check if a user can initiate staking
-     * @param user The address of the user to check
-     * @return True if the user meets the staking requirements
+     * @notice Check if a user has enough balance to initiate staking
+     * @param user The address to check
+     * @return bool indicating if the user meets the staking requirements
      */
     function canStake(address user) external view override returns (bool) {
         SavingsStorage storage ss = _getSavingsStorage();
         SavingsInfo storage info = ss.savings[user];
+
         return info.currentBalance >= STAKING_AMOUNT && !info.isStaking;
     }
 
     /**
      * @notice Retrieve the Safe address linked to a user
      * @param user The address of the user
-     * @return The address of the linked Safe
+     * @return The address of the user's linked Safe
      */
     function getUserSafe(address user) external view override returns (address) {
         return _getSavingsStorage().userSafes[user];
@@ -145,6 +216,7 @@ contract SavingsFacet is ISavingsFacet {
     function getUserContributions(address user) external view returns (uint256 totalContributed, uint256 availableForWithdrawal) {
         SavingsStorage storage ss = _getSavingsStorage();
         SavingsInfo storage info = ss.savings[user];
+
         totalContributed = info.totalDeposited;
         availableForWithdrawal = info.currentBalance;
     }

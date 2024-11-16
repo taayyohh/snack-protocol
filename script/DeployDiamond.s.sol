@@ -13,6 +13,8 @@ import { SavingsLiquityConnector } from "../src/facets/SavingsLiquityConnector.s
 import { Diamond } from "../src/core/Diamond.sol";
 import { DiamondInit } from "../src/initializers/DiamondInit.sol";
 import { IDiamondCut } from "../src/interfaces/IDiamondCut.sol";
+import { ILiquityIntegration } from "../src/interfaces/ILiquityIntegration.sol";
+
 
 contract DeployDiamond is Script {
     // Base Sepolia addresses (with correct checksums)
@@ -20,10 +22,10 @@ contract DeployDiamond is Script {
     address constant SAFE_SINGLETON = 0xfb1bffC9d739B8D520DaF37dF666da4C687191EA;
 
     // Liquity on Base Sepolia (with correct checksums)
-    address constant BORROWER_OPERATIONS = 0x4f61ff76C087e3240F088A91822a14ebe297DF14;
-    address constant TROVE_MANAGER = 0x3F3E304634275c9B02db68BfBe42098faBB6F892;
-    address constant STABILITY_POOL = 0x0F3d842387B7579D52f9477e1E4633920b1b0C01;
-    address constant LUSD_TOKEN = 0x6e2B76966cbD9cF4cC2Fa0D76d24d5241E0ABC2F;
+    address constant BORROWER_OPERATIONS = 0x293495cB5f88CbdEE3cfF0C9057f0d7a917e014B;
+    address constant TROVE_MANAGER = 0x1005178d3618424dfA2991a436E5f426288b3E2F;
+    address constant STABILITY_POOL = 0xA36b979F1d11D9B9410A841bbc2Fc5598eEefC20;
+    address constant LUSD_TOKEN = 0x1FfB1C9cC231FA71EadB62BC5faAA8B1EA78058D;
 
     // Protocol parameters
     uint256 constant MIN_COLLATERAL_RATIO = 150; // 150%
@@ -111,8 +113,8 @@ contract DeployDiamond is Script {
         stakingSelectors[2] = LiquityStakingFacet.adjustDebt.selector;
         stakingSelectors[3] = LiquityStakingFacet.claimRewards.selector;
         stakingSelectors[4] = LiquityStakingFacet.closePosition.selector;
-        stakingSelectors[5] = LiquityStakingFacet.getPosition.selector;
-        stakingSelectors[6] = LiquityStakingFacet.getRewards.selector;
+        stakingSelectors[5] = ILiquityIntegration.getPosition.selector;
+        stakingSelectors[6] = ILiquityIntegration.getRewards.selector;
 
         cuts[2] = IDiamondCut.FacetCut({
             facetAddress: address(liquityStakingFacet),
@@ -121,7 +123,7 @@ contract DeployDiamond is Script {
         });
 
         // Pet facet
-        bytes4[] memory petSelectors = new bytes4[](8);
+        bytes4[] memory petSelectors = new bytes4[](7);
         petSelectors[0] = PetFacet.initializePet.selector;
         petSelectors[1] = PetFacet.feed.selector;
         petSelectors[2] = PetFacet.updateDailyTarget.selector;
@@ -129,7 +131,6 @@ contract DeployDiamond is Script {
         petSelectors[4] = PetFacet.calculatePetState.selector;
         petSelectors[5] = PetFacet.calculateHappiness.selector;
         petSelectors[6] = PetFacet.getFoodPrice.selector;
-        petSelectors[7] = PetFacet.upgradeToPremium.selector;
 
         cuts[3] = IDiamondCut.FacetCut({
             facetAddress: address(petFacet),

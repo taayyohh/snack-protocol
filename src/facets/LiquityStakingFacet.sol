@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import { LibDiamond } from "../libraries/LibDiamond.sol";
 import { ILiquityIntegration } from "../interfaces/ILiquityIntegration.sol";
 import { IBorrowerOperations, ITroveManager, IStabilityPool, ILUSD } from "../interfaces/ILiquityCore.sol";
-import { DiamondStorage } from "../libraries/DiamondTypes.sol";
 
 /**
  * @title LiquityStakingFacet
- * @notice Manages Liquity V2 integration for yield generation
+ * @notice Facilitates integration with the Liquity protocol for yield generation and collateralized borrowing.
  */
 contract LiquityStakingFacet is ILiquityIntegration {
     /**
@@ -20,45 +18,38 @@ contract LiquityStakingFacet is ILiquityIntegration {
         IStabilityPool stabilityPool;
         ILUSD lusdToken;
         mapping(address => Position) positions;
-        uint256 minCollateralRatio;  // Minimum collateral ratio (in percentage)
-        uint256 borrowFee;           // Borrowing fee (in percentage)
+        uint256 minCollateralRatio;
+        uint256 borrowFee;
     }
 
-    /**
-     * @dev Get Liquity storage
-     */
+    /// @dev Get Liquity storage
     function _getLiquityStorage() internal pure returns (LiquityStorage storage ls) {
         bytes32 position = keccak256("snack.protocol.storage.liquity");
         assembly {
             ls.slot := position
         }
+
         return ls;
     }
 
-    /**
-     * @notice Open a new Liquity position with ETH collateral
-     * @param borrowAmount Amount of LUSD to borrow
-     */
+    /// @inheritdoc ILiquityIntegration
     function openPosition(uint256 borrowAmount) external payable override {
-        if (msg.value == 0) revert InsufficientCollateral();
+        require(msg.value > 0, "Insufficient collateral");
 
         LiquityStorage storage ls = _getLiquityStorage();
-        if (ls.positions[msg.sender].isActive) revert PositionAlreadyExists();
+        require(!ls.positions[msg.sender].isActive, "Position already exists");
 
-        // Calculate safe borrowing amount based on collateral
         uint256 maxBorrowAmount = _calculateMaxBorrow(msg.value);
-        if (borrowAmount > maxBorrowAmount) revert UnsafePositionRatio();
+        require(borrowAmount <= maxBorrowAmount, "Unsafe position ratio");
 
-        // Open Trove (Liquity's term for a position)
         ls.borrowerOperations.openTrove{value: msg.value}(
             ls.borrowFee,
             borrowAmount,
             msg.value,
-            address(0), // Upper hint - optimized later
-            address(0)  // Lower hint - optimized later
+            address(0),
+            address(0)
         );
 
-        // Update storage
         ls.positions[msg.sender] = Position({
             collateral: msg.value,
             debt: borrowAmount,
@@ -70,58 +61,36 @@ contract LiquityStakingFacet is ILiquityIntegration {
         emit PositionOpened(msg.sender, msg.value, borrowAmount);
     }
 
-    /**
-     * @notice Add collateral to existing position
-     */
+    /// @inheritdoc ILiquityIntegration
     function addCollateral() external payable override {
-        if (msg.value == 0) revert InvalidAmount();
+        require(msg.value > 0, "Invalid collateral amount");
 
         LiquityStorage storage ls = _getLiquityStorage();
         Position storage position = ls.positions[msg.sender];
-        if (!position.isActive) revert PositionNotFound();
+        require(position.isActive, "Position not found");
 
-        // Add collateral to Trove
-        ls.borrowerOperations.addColl{value: msg.value}(
-            address(0), // Upper hint
-            address(0)  // Lower hint
-        );
-
-        // Update storage
+        ls.borrowerOperations.addColl{value: msg.value}(address(0), address(0));
         position.collateral += msg.value;
         position.lastUpdate = block.timestamp;
 
         emit CollateralAdded(msg.sender, msg.value);
     }
 
-    /**
-     * @notice Adjust position's debt
-     * @param newDebt New total debt amount
-     */
+    /// @inheritdoc ILiquityIntegration
     function adjustDebt(uint256 newDebt) external override {
         LiquityStorage storage ls = _getLiquityStorage();
         Position storage position = ls.positions[msg.sender];
-        if (!position.isActive) revert PositionNotFound();
+        require(position.isActive, "Position not found");
 
         uint256 maxBorrow = _calculateMaxBorrow(position.collateral);
-        if (newDebt > maxBorrow) revert UnsafePositionRatio();
+        require(newDebt <= maxBorrow, "Unsafe position ratio");
 
         if (newDebt > position.debt) {
-            // Borrow more
             uint256 borrowMore = newDebt - position.debt;
-            ls.borrowerOperations.withdrawLUSD(
-                ls.borrowFee,
-                borrowMore,
-                address(0),
-                address(0)
-            );
+            ls.borrowerOperations.withdrawLUSD(ls.borrowFee, borrowMore, address(0), address(0));
         } else {
-            // Repay debt
             uint256 repayAmount = position.debt - newDebt;
-            ls.borrowerOperations.repayLUSD(
-                repayAmount,
-                address(0),
-                address(0)
-            );
+            ls.borrowerOperations.repayLUSD(repayAmount, address(0), address(0));
         }
 
         position.debt = newDebt;
@@ -130,63 +99,47 @@ contract LiquityStakingFacet is ILiquityIntegration {
         emit DebtAdjusted(msg.sender, newDebt);
     }
 
-    /**
-     * @notice Claim accumulated rewards
-     */
+    /// @inheritdoc ILiquityIntegration
     function claimRewards() external override {
         LiquityStorage storage ls = _getLiquityStorage();
         Position storage position = ls.positions[msg.sender];
-        if (!position.isActive) revert PositionNotFound();
+        require(position.isActive, "Position not found");
 
-        // Claim ETH gains from stability pool if any
         uint256 ethGains = ls.stabilityPool.getDepositorETHGain(msg.sender);
+        require(ethGains > 0, "No rewards available");
 
-        if (ethGains == 0) revert NoRewardsAvailable();
-
-        // Withdraw from stability pool
-        ls.stabilityPool.withdrawFromSP(0); // 0 to just claim rewards
-
+        ls.stabilityPool.withdrawFromSP(0);
         position.rewardsClaimed += ethGains;
         position.lastUpdate = block.timestamp;
 
         emit RewardsClaimed(msg.sender, 0, ethGains);
     }
 
-    /**
-     * @notice Close position and withdraw all collateral
-     */
+    /// @inheritdoc ILiquityIntegration
     function closePosition() external override {
         LiquityStorage storage ls = _getLiquityStorage();
         Position storage position = ls.positions[msg.sender];
-        if (!position.isActive) revert PositionNotFound();
+        require(position.isActive, "Position not found");
 
-        // Close Trove
         ls.borrowerOperations.closeTrove();
-
-        // Clean up storage
         delete ls.positions[msg.sender];
+
+        emit PositionClosed(msg.sender);
     }
 
-    /**
-     * @notice Get user's current position
-     */
-    function getPosition(address user) external view override returns (Position memory) {
-        return _getLiquityStorage().positions[user];
+    /// @inheritdoc ILiquityIntegration
+    function getPosition(address user) external view override returns (Position memory position) {
+        LiquityStorage storage ls = _getLiquityStorage();
+        return ls.positions[user];
     }
 
-    /**
-     * @notice Get user's current rewards
-     */
+    /// @inheritdoc ILiquityIntegration
     function getRewards(address user) external view override returns (uint256 lqtyRewards, uint256 ethGains) {
         LiquityStorage storage ls = _getLiquityStorage();
         ethGains = ls.stabilityPool.getDepositorETHGain(user);
-        // LQTY rewards would be implemented based on Liquity V2 specs
         return (0, ethGains);
     }
 
-    /**
-     * @dev Calculate maximum safe borrowing amount
-     */
     function _calculateMaxBorrow(uint256 collateralAmount) internal view returns (uint256) {
         LiquityStorage storage ls = _getLiquityStorage();
         return (collateralAmount * 100) / ls.minCollateralRatio;

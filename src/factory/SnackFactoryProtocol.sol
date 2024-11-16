@@ -94,7 +94,6 @@ contract SnackProtocolFactory {
         petSelectors[4] = PetFacet.calculateHappiness.selector;
         petSelectors[5] = PetFacet.getFoodPrice.selector;
         petSelectors[6] = PetFacet.updateDailyTarget.selector;
-        petSelectors[7] = PetFacet.upgradeToPremium.selector;
 
         cut[1] = IDiamondCut.FacetCut({
             facetAddress: address(petFacet),
