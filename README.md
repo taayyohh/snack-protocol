@@ -1,11 +1,11 @@
-# 🐾 Snacks Protocol 🍪
+# 🐾 Snack Snack Protocol 🍪
 
-Welcome to **Snacks**, the cutest and most delightful way to make Ethereum more decentralized while having fun! 🎉
+Welcome to **Snack Snack**, the cutest and most delightful way to make Ethereum more decentralized while having fun! 🎉
 
 ---
 
-## 🍬 What is Snacks?
-Snacks is a **gamified Tamagotchi-inspired protocol** that lets you:
+## 🍬 What is Snack Snack?
+Snack Snack is a **gamified Tamagotchi-inspired protocol** that lets you:
 - Save **32 ETH** for deploying an Ethereum validator. 🚀
 - Help decentralize the Ethereum network while enjoying an adorable journey with your virtual pets! 🐕🐾
 
